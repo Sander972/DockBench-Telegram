@@ -1,0 +1,3 @@
+# DockBench dev container runtime. Matches the Dockerfile and CI (python:3.13); the image's own python3 is bookworm's 3.11.
+[tools]
+python = "3.13"

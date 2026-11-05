@@ -1,0 +1,25 @@
+services:
+  telegram:
+    image: ghcr.io/sander972/dockbench-telegram:latest
+    container_name: dockbench-telegram
+    init: true
+    environment:
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_GROUP_ID: ${TELEGRAM_GROUP_ID:-}
+      TELEGRAM_OWNER_ID: ${TELEGRAM_OWNER_ID:-}
+      DOCKER_HOST: ${DOCKER_HOST:-unix:///var/run/docker.sock}
+    group_add:
+      - ${DOCKER_GID}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - state:/data
+    networks:
+      - devnet
+    restart: unless-stopped
+
+volumes:
+  state:
+
+networks:
+  devnet:
+    external: true

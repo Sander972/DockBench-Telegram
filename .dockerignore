@@ -1,0 +1,4 @@
+*
+!bot.py
+!tgbot/*.py
+**/__pycache__
