@@ -1,5 +1,6 @@
 """Pinned status per topic: the workspace repo, its branch, its uncommitted changes and the topic's sessions (running, queued and idle), kept up to date in one pinned bot message."""
 import html
+import json
 import threading
 import time
 
@@ -78,6 +79,18 @@ def subrepos(cid):
         if code == 0:
             subs.append(dict(parse_status(out.decode(errors="replace")), dir=d))
     return subs
+
+
+def pin_facts(cid):
+    """(git_info(), subrepos()) of the container in one exec of dockbench-agent, which reads git in-process (only `git diff HEAD --numstat` still runs, and only while tracked files changed); the older execs (3 git, a find and one git per subrepo) for an image without it, or when its answer is unusable."""
+    r = dockerapi.agent(cid, ["pin-info", WORKSPACE])
+    if r and r[0] == 0:
+        try:
+            d = json.loads(r[1])
+            return d["git"], d["subs"]
+        except (ValueError, KeyError, TypeError):
+            log.warning("dockbench-agent pin-info answered something else, using git execs")
+    return git_info(cid), subrepos(cid)
 
 
 def push_note(g):
@@ -257,7 +270,7 @@ def refresh():
         health = c["State"] if c else "not found"
         try:
             if health == "running" and name not in gits:
-                gits[name], subs[name] = git_info(c["Id"]), subrepos(c["Id"])
+                gits[name], subs[name] = pin_facts(c["Id"])
             if health == "running":
                 titles(tid, c["Id"])
             sessions, idle = rows(tid)

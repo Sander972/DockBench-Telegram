@@ -95,6 +95,21 @@ def exec_run(cid, cmd, timeout=60, env=EXEC_ENV):
     return exec_exit(eid), out
 
 
+AGENT = "/usr/local/bin/dockbench-agent"
+NO_AGENT = set()  # ids of containers whose image has no dockbench-agent (built before it): their probes take the older execs
+
+
+def agent(cid, args, timeout=60):
+    """(exit code, output) of `dockbench-agent <args>` in the container, one native process where the older probes ran a `python3 -c` script or several git execs. None when the image has no agent: the caller then takes its older execs. Remembered per container id, so an old container costs one failed exec, not one per probe (a recreated container gets a new id and is asked again)."""
+    if cid in NO_AGENT:
+        return None
+    code, out = exec_run(cid, [AGENT, *args], timeout)
+    if code in (126, 127) or b"exec failed" in out:  # Docker's answer to a missing binary: 127 and "OCI runtime exec failed: ..." in the stream
+        NO_AGENT.add(cid)
+        return None
+    return code, out
+
+
 def get_files(cid, path, limit):
     """The regular files under path in the container, as (name inside path, bytes). Symlinks, links and devices are left out and a tar over limit bytes raises: the container is not trusted."""
     with docker("GET", f"/containers/{cid}/archive?path={urllib.parse.quote(path)}", stream=True) as resp:

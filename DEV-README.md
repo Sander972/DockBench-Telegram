@@ -47,7 +47,7 @@ The pin shows one **⬆ <repo> (N)** button per repo with commits its upstream l
 
 ### Claude usage
 
-The General topic's pinned message shows the plan limits (current session, current week, per-model week) of every account signed in in a running dev container: one block per account with the containers that use it, then the containers that are signed out or stopped. It is refreshed every 5 minutes and shortly after a prompt starts or ends. The bot runs Claude Code's own `/usage` in one container per account, so nothing is billed and the bot never handles a token.
+The General topic's pinned message shows the plan limits (current session, current week, per-model week) of every account signed in in a running dev container: one block per account with the containers that use it, then the containers that are signed out or stopped. It is refreshed every 10 minutes and shortly after a prompt starts or ends, at most once every 2 minutes. The bot runs Claude Code's own `/usage` in one container per account, so nothing is billed and the bot never handles a token; `claude auth status`, which tells which account a container uses, reruns only when the container's sign-in files change (asked from `dockbench-agent claude-key`, which never reads the token).
 
 ### Claude's commands in the menu
 
@@ -111,6 +111,7 @@ The self-check is one function of assertions in `tgbot/check.py`; new logic gets
 - `--permission-prompts none` is always passed, so nothing can ever wait on a prompt.
 - The run is wrapped in `timeout -k 30 14400`, so the 4-hour limit is enforced inside the container. Every minute the bot probes each run for the CPU time of the wrapper and its descendants and the age of the newest write to the session's transcript; a run with no transcript write and under 5% of a core for 15 minutes is killed like `/stop`. `/stop` sends `pkill` to that wrapper only, never to an interactive Claude, another topic's run or the VS Code extension's process for the same session.
 - On startup the bot stops leftover runs of a previous instance, since a Docker exec outlives its client.
+- The probes (the pin's git facts, a run's activity, a session's title, the sign-in fingerprint) are one exec each of `/usr/local/bin/dockbench-agent`, the DockBench image's native helper, which reads git in-process. For a container whose image predates it (Docker answers 127), the bot remembers its id and takes the older execs: `git` commands, `find` and `python3 -c` scripts.
 - The prompt is passed after `--`, so text starting with `-` is not parsed as a flag.
 - A session is keyed by the message id of its first request, and the state file maps every request, answer and status message id to its session, so a reply anywhere in the chain finds it. The Bot API cannot look up a message, so this map is the only way.
 - Pickers wait in memory only, with the request; a restart drops them, so the message text never lands on disk.

@@ -7,9 +7,11 @@ from concurrent.futures import ThreadPoolExecutor
 from . import dockerapi, state, telegram
 from .config import log
 
-EVERY = 5 * 60  # seconds between passes when no run starts or ends
+EVERY = 10 * 60  # seconds between passes when no run starts or ends
+MIN_GAP = 120  # seconds at least between two passes, also after a WAKE: each pass starts a Claude Code (`claude -p /usage`) per account, a few hundred MB and seconds of CPU
 WAKE = threading.Event()  # set when a run starts or ends: a prompt sent to an account, or its answer back, shows in its limits without waiting for the next pass
 SHOWN = None  # (message id, text) last shown, so an unchanged message is not edited
+ACCOUNTS = {}  # container id -> (dockbench-agent claude-key, account()): `claude auth status` is a whole Claude Code start, so it reruns only when the container's sign-in files changed
 
 # Both are local commands: Claude answers without a model call, so they cost nothing (checked with Claude Code 2.1.306). The container's own Claude reads the limits with its own credentials, so the bot never handles a token. Not persisted, and RUN_MARK does not match them, so recover() and /stop leave them alone.
 AUTH = ["timeout", "30", "claude", "auth", "status"]
@@ -29,6 +31,18 @@ def account(cid):
     return info.get("email") or info.get("authMethod") or "unknown account", info.get("subscriptionType")
 
 
+def account_cached(cid):
+    """account(), reused while the container's sign-in fingerprint (`dockbench-agent claude-key`: the credentials file's size and time, the account email) is unchanged. Images without the agent ask `claude auth status` on every pass, as before."""
+    r = dockerapi.agent(cid, ["claude-key"])
+    key = r[1] if r and r[0] == 0 else None
+    if key is not None and ACCOUNTS.get(cid, (None,))[0] == key:
+        return ACCOUNTS[cid][1]
+    a = account(cid)
+    if key is not None:
+        ACCOUNTS[cid] = (key, a)
+    return a
+
+
 def limits(text):
     """The limit lines of /usage's answer: what comes before its per-machine breakdown, without the billing line."""
     head = text.split("What's contributing")[0]
@@ -41,10 +55,12 @@ def report():
     except Exception as e:
         return f"docker error: {e}"
     running = sorted((c for c in dev if c.get("State") == "running"), key=dockerapi.project)
+    for cid in set(ACCOUNTS) - {c["Id"] for c in running}:  # stopped or recreated: a later start is asked again
+        ACCOUNTS.pop(cid, None)
 
     def who(c):
         try:
-            return account(c["Id"])
+            return account_cached(c["Id"])
         except Exception as e:
             log.warning("dockbench-%s: claude auth status failed: %s", dockerapi.project(c), e)
             return "error"
@@ -97,7 +113,7 @@ def show(group, text):
 
 
 def usage_loop():
-    """Own thread: a pass every EVERY seconds, or ~5 s after WAKE. The execs take seconds per container: they must not hold up getUpdates or the pins."""
+    """Own thread: a pass every EVERY seconds, or ~5 s after WAKE but never sooner than MIN_GAP after the previous pass. The execs take seconds per container: they must not hold up getUpdates or the pins."""
     last = None
     while True:
         if state.GROUP_ID and state.OWNER_ID:
@@ -108,7 +124,8 @@ def usage_loop():
                 if str(e) != last:
                     log.warning("usage message update failed: %s", e)
                 last = str(e)
+        done = time.monotonic()
         if WAKE.wait(EVERY):
-            time.sleep(5)  # the account's usage catches up with the request that just ended, and a burst of wakes makes one pass
+            time.sleep(max(5, MIN_GAP - (time.monotonic() - done)))  # the account's usage catches up with the request that just ended, and a burst of wakes makes one pass
         WAKE.clear()
 
