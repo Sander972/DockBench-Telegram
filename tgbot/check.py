@@ -547,6 +547,21 @@ def self_check():
     tap("cleango:7", 910)
     edits = [p["text"] for m, p in calls if m == "editMessageText"]
     assert edits == ["cleaning…", "deleted the messages of 1 idle session(s)"] and "60" not in state.STATE["sessions"], (edits, state.STATE["sessions"])
+    # /clean or /clear as a reply to a session: only that one, never one at work; a reply to an unknown message cleans nothing
+    state.STATE["sessions"].update({"70": {"tid": 7}, "80": {"tid": 7}, "90": {"tid": 7}})
+    state.STATE["replies"].update({"70": 70, "71": 70, "80": 80, "90": 90})
+    state.ACTIVE[90] = runs.Run(90, 7)
+    calls = []
+    routing.handle({"update_id": 11, "message": topic_msg(406, "/clear", reply=71)}, {})
+    assert calls[0] == ("deleteMessages", {"chat_id": state.GROUP_ID, "message_ids": [70, 71]}) and calls[-1][1]["text"].endswith("deleted the messages of session 🟥 #70"), calls
+    assert "70" not in state.STATE["sessions"] and {"80", "90"} <= set(state.STATE["sessions"]) and "71" not in state.STATE["replies"], state.STATE
+    calls = []
+    routing.handle({"update_id": 12, "message": topic_msg(407, "/clean", reply=90)}, {})
+    assert [m for m, p in calls] == ["sendMessage"] and calls[0][1]["text"].endswith("this session is running, /stop it first") and "90" in state.STATE["sessions"], calls
+    calls = []
+    routing.handle({"update_id": 13, "message": topic_msg(408, "/clean", reply=12345)}, {})
+    assert [m for m, p in calls] == ["sendMessage"] and "not part of a session" in calls[0][1]["text"] and "80" in state.STATE["sessions"], calls
+    state.ACTIVE.clear()
     routing.threading = real_threading
 
     # a session's badge: close keys differ in shape and color; its tag: Claude's title once it has one, else the badge, and the message's number in the session, which send() puts on top of every part, still within 4096

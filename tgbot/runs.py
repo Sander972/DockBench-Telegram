@@ -332,13 +332,13 @@ def watchdog():
                 log.warning("session %s: watchdog kill: %s", r.key, e)
 
 
-def clean(tid):
-    """/clean: delete the messages recorded for this topic's idle sessions (requests, follow-ups, answers, status messages), then forget the sessions whose messages are all gone. Returns the reply. Slow (Telegram calls), so not on the polling thread."""
+def clean(tid, key=None):
+    """/clean: delete the messages recorded for this topic's idle sessions (requests, follow-ups, answers, status messages), or only for session key (/clean as a reply to it), then forget the sessions whose messages are all gone. Returns the reply. Slow (Telegram calls), so not on the polling thread."""
     with state.LOCK:
-        keys = {k for k, s in state.STATE["sessions"].items() if s.get("tid") == tid and int(k) not in state.ACTIVE and not s.get("working")}
+        keys = {k for k, s in state.STATE["sessions"].items() if s.get("tid") == tid and int(k) not in state.ACTIVE and not s.get("working") and (key is None or k == str(key))}
         ids = sorted(int(m) for m, k in state.STATE["replies"].items() if str(k) in keys)
     if not keys:
-        return "no idle sessions to clean"
+        return "no idle sessions to clean" if key is None else "this session is running, /stop it first"
     failed = set()
     for i in range(0, len(ids), 100):
         batch = ids[i:i + 100]
@@ -362,7 +362,7 @@ def clean(tid):
         state.save()
     pins.WAKE.set()  # the pin lists idle sessions: drop the cleaned ones
     log.info("thread %s: cleaned %d sessions, %d messages not deleted", tid, len(done - left), len(failed))
-    note = f"deleted the messages of {len(done - left)} idle session(s)"
+    note = f"deleted the messages of {len(done - left)} idle session(s)" if key is None else f"deleted the messages of session {session_name(key)}"
     if failed:
         note += f"; {len(failed)} message(s) could not be deleted (the bot needs the Delete messages admin right, and Telegram may refuse old messages), send /clean again to retry"
     return note

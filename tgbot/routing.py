@@ -18,7 +18,11 @@ def command(tid, cmd, arg, m):
         return telegram.send(tid, HELP)
     if cmd == "push":
         return push.spawn(push.pick, tid, arg)
-    if cmd == "clean":
+    if cmd in ("clean", "clear"):  # clear: what Claude's own command would be, and that one does nothing headless
+        if key := state.session_of([m]):
+            return clean(tid, key=key)
+        if (m.get("reply_to_message") or {}).get("message_id", tid) != tid:  # a real reply, not the topic's implicit one: never fall back to cleaning the whole topic
+            return telegram.send(tid, "that message is not part of a session the bot knows, nothing cleaned", reply=m["message_id"])
         return clean(tid)
     if cmd == "stop":
         if key := state.session_of([m]):
@@ -36,11 +40,11 @@ def command(tid, cmd, arg, m):
     threading.Thread(target=status_work, daemon=True).start()
 
 
-def clean(tid, mid=None):
-    """/clean, or the pin's Clean button confirmed on message mid (its reply edited in there): runs.clean() makes many Telegram calls, so off the polling thread."""
+def clean(tid, mid=None, key=None):
+    """/clean (as a reply to a session, only session key), or the pin's Clean button confirmed on message mid (its reply edited in there): runs.clean() makes many Telegram calls, so off the polling thread."""
     def work():
         try:
-            note = runs.clean(tid)
+            note = runs.clean(tid, key)
             telegram.edit(mid, note) if mid else telegram.send(tid, note)
         except Exception:
             log.exception("thread %s: clean failed", tid)

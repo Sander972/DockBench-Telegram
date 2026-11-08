@@ -59,7 +59,7 @@ Every run uses the same user, home and working directory as the VS Code tunnel, 
 
 The extension loads a session when you open it and does not follow a run that is still going. Typing in a VS Code tab of a session while Telegram is running it would make both write to the same conversation. `/stop` only kills the bot's own run, never the Claude process behind a VS Code tab.
 
-`/clean` deletes the requests, answers and leftover status messages of the topic's idle sessions.
+`/clean` deletes the requests, answers and leftover status messages of the topic's idle sessions. Sent as a reply to a session's message (`/clear` works too, since Claude's own `/clear` does nothing in a headless run), it deletes only that session, and refuses one that is running; a reply to a message the bot does not know cleans nothing, so a mistaken reply never empties the whole topic.
 
 ### Limits and recovery
 

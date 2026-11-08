@@ -154,7 +154,7 @@ A run that looks hung is killed after 15 minutes without activity, and a busy on
 | `/status` | Container state, whether Claude is signed in there, the VS Code link, the sessions running in this topic and the last pick. |
 | `/stop` | Stop every session running in this topic and drop their queued follow-ups. As a reply to a session's message: only that session. |
 | `/push [repo]` | Push the workspace repo, or a repo folder inside it, after a confirmation tap. With several repos to push and no name, asks which. |
-| `/clean` | Delete the messages of this topic's idle sessions. Those sessions can no longer be continued from Telegram; they stay in VS Code. The pin's **🧹 Clean idle sessions (N)** button does the same. |
+| `/clean` | Delete the messages of this topic's idle sessions. Those sessions can no longer be continued from Telegram; they stay in VS Code. The pin's **🧹 Clean idle sessions (N)** button does the same. As a reply to a session's message (`/clean` or `/clear`): only that session, if it is not running. |
 | `/bind <PROJECT>` | Link this topic to `dockbench-<PROJECT>`. |
 | `/setup` | Re-run the setup checklist for the group. `/setup move` in another forum group moves the bot there. |
 | `/help` | The command list. Also what the bot answers in the General topic. |
