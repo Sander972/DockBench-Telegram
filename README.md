@@ -145,7 +145,7 @@ Headless runs cannot ask for approval, so anything that would need one is denied
 
 A `deny` rule for `Bash` in your Claude settings removes the shell tool, and the answer then says so. Narrow the rule (`Bash(rm -rf *)` instead of `Bash`) if Claude needs to build and test.
 
-A run that looks hung is killed after 15 minutes without activity, and a busy one stops at 4 hours or 80 turns. Either way the session is kept, so a reply continues it. [DEV-README.md](DEV-README.md#behavior-in-detail) covers these limits, bot restarts and the other edge cases.
+A run that looks hung is killed after 15 minutes without activity, and a busy one stops at 4 hours or 180 turns. Either way the session is kept, so a reply continues it. [DEV-README.md](DEV-README.md#behavior-in-detail) covers these limits, bot restarts and the other edge cases.
 
 ## Commands
 

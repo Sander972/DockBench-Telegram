@@ -63,7 +63,7 @@ The extension loads a session when you open it and does not follow a run that is
 
 ### Limits and recovery
 
-- Limits. A run that looks hung is killed: nothing written to its session and almost no CPU for 15 minutes. Busy runs (builds, tests, subagents) keep going, up to 4 hours or 80 turns. The session is kept, so a reply continues it.
+- Limits. A run that looks hung is killed: nothing written to its session and almost no CPU for 15 minutes. Busy runs (builds, tests, subagents) keep going, up to 4 hours or 180 turns. The session is kept, so a reply continues it.
 - Gone sessions. If a session no longer exists in the container (for example after its volume was recreated), the bot starts a new one for that prompt by itself.
 - Bot restarts. A run keeps going inside the dev container when the bot stops, so a restarted bot first stops the runs a previous instance left behind and replies to their requests. Queued follow-ups and pickers waiting for a tap are dropped. Update the bot when nothing is running.
 - Telegram hiccups. Calls to Telegram are retried for about 30 seconds on network errors, 5xx and rate limits. Topic creation is never retried, so a topic is never created twice; if one did not show up, create it by hand with the project's name.

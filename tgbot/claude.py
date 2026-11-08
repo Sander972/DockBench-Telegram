@@ -13,7 +13,7 @@ def claude_cmd(cfg, prompt, sid, resume, out):
     return ["timeout", "-k", "30", str(RUN_TIMEOUT), "claude", "-p",
             "--model", cfg["model"], "--effort", cfg["effort"], "--permission-mode", cfg.get("perm") or DEFAULT_PERM,
             "--permission-prompts", "none", "--add-dir", INBOX, "--add-dir", out, "--append-system-prompt", OUTBOX_PROMPT.format(dir=out),
-            "--output-format", "stream-json", "--verbose", "--max-turns", "80",
+            "--output-format", "stream-json", "--verbose", "--max-turns", "180",
             "--resume" if resume else "--session-id", sid, "--", prompt]
 
 
