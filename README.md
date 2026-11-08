@@ -125,7 +125,7 @@ Each topic has a pinned message with the container's repo and branch, uncommitte
 
 ### Claude usage and commands
 
-The General topic has a pinned message with the plan limits of every Claude account signed in in your running containers, refreshed every 5 minutes. Your skills and slash commands appear in Telegram's `/` menu, and any `/command` the bot does not know is sent to Claude as the prompt.
+The General topic has a pinned message with the plan limits of every Claude account signed in in your running containers, refreshed every 10 minutes. Your skills and slash commands appear in Telegram's `/` menu, and any `/command` the bot does not know is sent to Claude as the prompt.
 
 ### Sessions in VS Code
 

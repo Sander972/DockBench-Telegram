@@ -12,7 +12,7 @@ import urllib.error
 import urllib.request
 
 from . import claude, commands, dockerapi, markdown, onboarding, pins, push, routing, runs, state, status, telegram, topics, usage
-from .config import BOT_MENU, DEFAULT_PROMPT, EFFORTS, IDLE_LIMIT, INBOX, MAX_SESSIONS, MODELS, PERMS, RUN_MARK, RUN_TIMEOUT
+from .config import BOT_MENU, DEFAULT_PROMPT, EFFORTS, IDLE_LIMIT, INBOX, MAX_SESSIONS, MODELS, PERMS, RUN_MARK, RUN_TIMEOUT, WORKSPACE
 
 
 def self_check():
@@ -660,6 +660,8 @@ def self_check():
     execs = []
 
     def fake(cid, cmd, timeout=60, env=None):
+        if cmd[0] == dockerapi.AGENT:  # images without dockbench-agent: account() on every pass
+            return 127, b'OCI runtime exec failed: exec failed: unable to start container process: exec: "/usr/local/bin/dockbench-agent": stat /usr/local/bin/dockbench-agent: no such file or directory'
         execs.append((cid, cmd[3]))
         if cmd == usage.USAGE:
             return (0, out.encode()) if cid == "a" else (1, b"Error: rate limited\n")
@@ -670,6 +672,53 @@ def self_check():
     report = usage.report()
     assert report == "👤 me@x (max) · a, b\nCurrent session: 2% used · resets Nov 2, 9:20pm (UTC)\nCurrent week (all models): 53% used · resets Nov 3, 1am (UTC)\n\n👤 two@x · f\nusage unavailable: Error: rate limited\n\nnot signed in: c\nerror: e\nnot running: d", report
     assert sorted(c for c, k in execs if k == "-p") == ["a", "f"], execs
+    assert dockerapi.NO_AGENT >= {"a", "b", "c", "f"} and not usage.ACCOUNTS, (dockerapi.NO_AGENT, usage.ACCOUNTS)
+
+    # with dockbench-agent, `claude auth status` reruns only when the sign-in fingerprint changes; a stopped container's entry goes
+    dockerapi.NO_AGENT.clear()
+    keys, execs = {"a": b"10:1:me@x\n", "b": b"10:2:me@x\n", "c": b"signed-out:\n", "e": b"x\n", "f": b"9:9:two@x\n"}, []
+
+    def fake2(cid, cmd, timeout=60, env=None):
+        if cmd == [dockerapi.AGENT, "claude-key"]:
+            return 0, keys[cid]
+        return fake(cid, cmd, timeout, env)
+    dockerapi.exec_run = fake2
+    assert usage.report() == report and sorted(c for c, k in execs if k == "auth") == ["a", "b", "c", "e", "f"], execs  # e fails, so it is never cached
+    execs.clear()
+    keys["b"] = b"11:3:me@x\n"
+    assert usage.report() == report and sorted(c for c, k in execs if k == "auth") == ["b", "e"], execs
+    dockerapi.dev_containers = lambda: [{"Id": "a", "Names": ["/dockbench-a"], "State": "running"}]
+    usage.report()
+    assert set(usage.ACCOUNTS) == {"a"}, usage.ACCOUNTS
+    usage.ACCOUNTS.clear()
+
+    # dockbench-agent probes: one exec each, the older execs only for an image without it (asked once per container id)
+    seen = []
+
+    def agent_exec(cid, cmd, timeout=60, env=None):
+        seen.append((cid, cmd))
+        if cid == "old":
+            return (127, b"OCI runtime exec failed: exec failed") if cmd[0] == dockerapi.AGENT else (0, b"7.5 3\n" if cmd[0] == "python3" else b"")
+        if cmd == [dockerapi.AGENT, "pin-info", WORKSPACE]:
+            return 0, json.dumps({"git": {"branch": "main", "oid": "abc", "untracked": 1, "upstream": True, "gone": False, "ahead": 2, "add": 3, "del": 1, "files": 2, "repo": "shop"}, "subs": [{"branch": "feat", "oid": "def", "untracked": 0, "upstream": False, "gone": True, "ahead": 0, "dir": "A"}]}).encode()
+        if cmd == [dockerapi.AGENT, "pin-info", "bad"]:
+            return 0, b"not json"
+        return {"activity": (0, b"12.5 30\n"), "title": (0, b"Fix login")}[cmd[1]]
+    dockerapi.exec_run = agent_exec
+    assert claude.activity("new", "s") == (12.5, 30) and claude.title("new", "s") == "Fix login" and seen == [("new", [dockerapi.AGENT, "activity", "s"]), ("new", [dockerapi.AGENT, "title", "s"])], seen
+    g, subs = pins.pin_facts("new")
+    assert (g["repo"], g["ahead"], subs[0]["dir"], subs[0]["gone"]) == ("shop", 2, "A", True) and len(seen) == 3, (g, subs)
+    seen.clear()
+    assert claude.activity("old", "s") == (7.5, 3) and claude.activity("old", "s") == (7.5, 3), seen
+    assert [c[0] for _, c in seen] == [dockerapi.AGENT, "python3", "python3"] and dockerapi.NO_AGENT == {"old"}, seen
+    real_info, real_subs = pins.git_info, pins.subrepos
+    pins.git_info, pins.subrepos = (lambda cid: {"from": "git"}), (lambda cid: [])
+    try:
+        real_ws, pins.WORKSPACE = pins.WORKSPACE, "bad"
+        assert pins.pin_facts("new") == ({"from": "git"}, []) and pins.pin_facts("old") == ({"from": "git"}, [])
+    finally:
+        pins.git_info, pins.subrepos, pins.WORKSPACE = real_info, real_subs, real_ws
+    dockerapi.NO_AGENT.clear()
 
     # the usage message in General: sent and pinned once, then edited only when its text changed, sent again when deleted
     calls = []

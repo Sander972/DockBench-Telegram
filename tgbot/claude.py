@@ -17,7 +17,7 @@ def claude_cmd(cfg, prompt, sid, resume, out):
             "--resume" if resume else "--session-id", sid, "--", prompt]
 
 
-# Run in the container with a session id: prints the CPU seconds used so far by its run (the timeout wrapper and all its descendants, reaped children included), then the seconds since the session's transcript or one of its subagents' was last written (-1: none yet). Exits 3 when the run is not found.
+# The fallback for images without dockbench-agent, whose `activity` subcommand answers the same. Run in the container with a session id: prints the CPU seconds used so far by its run (the timeout wrapper and all its descendants, reaped children included), then the seconds since the session's transcript or one of its subagents' was last written (-1: none yet). Exits 3 when the run is not found.
 ACTIVITY = r"""
 import glob, os, sys, time
 sid, procs, top = sys.argv[1], {}, None
@@ -48,7 +48,7 @@ print(sum(procs[p][1] for p in tree) / os.sysconf("SC_CLK_TCK"), int(time.time()
 
 def activity(cid, sid):
     """(CPU seconds used so far, seconds since the session last wrote its transcript or None) of session sid's run in the container, or None when it is not found."""
-    code, out = dockerapi.exec_run(cid, ["python3", "-c", ACTIVITY, sid])
+    code, out = dockerapi.agent(cid, ["activity", sid]) or dockerapi.exec_run(cid, ["python3", "-c", ACTIVITY, sid])
     try:
         cpu, age = out.split()
         return (float(cpu), int(age) if int(age) >= 0 else None) if code == 0 else None
@@ -56,7 +56,7 @@ def activity(cid, sid):
         return None
 
 
-# Run in the container with a session id: prints the title Claude Code gave the session, from the last `ai-title` line of its transcript (written during its first run, also by `claude -p`; seen with Claude Code 2.1.306), nothing when it has none yet.
+# The fallback for images without dockbench-agent, whose `title` subcommand answers the same. Run in the container with a session id: prints the title Claude Code gave the session, from the last `ai-title` line of its transcript (written during its first run, also by `claude -p`; seen with Claude Code 2.1.306), nothing when it has none yet.
 TITLE = r"""
 import glob, json, os, sys
 title = ""
@@ -74,7 +74,7 @@ sys.stdout.write(title if isinstance(title, str) else "")
 
 def title(cid, sid):
     """The title Claude Code gave session sid, on one line and at most TITLE_MAX characters; "" when it has none yet."""
-    code, out = dockerapi.exec_run(cid, ["python3", "-c", TITLE, sid])
+    code, out = dockerapi.agent(cid, ["title", sid]) or dockerapi.exec_run(cid, ["python3", "-c", TITLE, sid])
     return " ".join(out.decode(errors="replace").split())[:TITLE_MAX] if code == 0 else ""
 
 
