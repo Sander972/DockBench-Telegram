@@ -15,7 +15,7 @@ The technical side of the bot: how it is built, how it behaves in the edge cases
 ### Sessions
 
 1. The picker asks the model (`fable`, `opus`, `sonnet`, `haiku`), then the effort (`low` to `max`), then the permission mode (`auto`, `acceptEdits`, `plan`, `manual`, `bypassPermissions`). The first row, `▶ <model> · <effort> · <mode> (as last time)`, repeats the topic's previous pick; `‹` goes back one step and `✖ Cancel` drops the request.
-2. The picker message turns into the status: `Fix login bug · working · opus · effort high · auto · new session · 3m 05s`, with a **⏹ Stop** button and what Claude writes between its steps.
+2. The picker message turns into the status: `Fix login bug · working · opus · effort high · auto · new session · 3m 05s`, with a **⏹ Stop** button and what Claude writes between its steps, as plain text. When that text fills the message, it stays in messages of its own, formatted like the answer, and a new status message carries on below them.
 3. The answer arrives as a reply to the request and the status message is deleted. Claude's markdown becomes Telegram formatting: bold, italics, code, links, headings in bold, bullets, and tables as a monospace block.
 4. Only when something went wrong, a line below the answer lists the tools denied without asking and why Claude could not run commands.
 

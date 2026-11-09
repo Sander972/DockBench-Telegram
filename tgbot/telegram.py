@@ -107,8 +107,16 @@ def send_images(thread, images, reply=None, caption=None):
     return ids
 
 
-def edit(mid, text, markup=None):
-    """No markup removes the buttons."""
+def edit(mid, text, markup=None, md=False, head=""):
+    """No markup removes the buttons. md: text is one md_chunks() part of Claude's markdown, edited in as Telegram HTML under the plain head line, and as plain text when Telegram refuses the markup."""
+    if md:
+        try:
+            return tg("editMessageText", chat_id=state.GROUP_ID, message_id=mid, text=html.escape(head) + "\n" + markdown.md_html(text), parse_mode="HTML", reply_markup=markup)
+        except TgError as e:
+            if "can't parse entities" not in str(e).lower():
+                raise
+            log.warning("message %s: Telegram refused the converted markup, editing in plain text", mid)
+        text = f"{head}\n{text}"
     tg("editMessageText", chat_id=state.GROUP_ID, message_id=mid, text=markdown.chunks(text)[0] if text.strip() else "(empty)", reply_markup=markup)
 
 
@@ -151,7 +159,7 @@ def overflow(head, turns, limit=4096):
     body = "\n\n".join(turns)
     if len(head) + 2 + len(body) <= limit:
         return [], turns
-    parts = markdown.chunks(body, limit - max(TAG_ROOM, len(head)) - 60)  # room for a part's tag, or the head and its growing time
+    parts = markdown.md_chunks(body, limit - 96 - max(TAG_ROOM, len(head)) - 60)  # room for a part's tag, or the head and its growing time; md_chunks and its 96 of room (send()'s md limit is 4000) so a moved part goes as one markdown message that never ends inside a ``` block
     return parts[:-1], parts[-1:]
 
 

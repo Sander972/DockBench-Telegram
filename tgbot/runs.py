@@ -284,7 +284,7 @@ def ticker():
 def split(r, status, head, turns, full, rest):
     """The status message of run r is full: its turn text so far is kept, the first part in it (tag instead of head, no Stop button) and the others in new messages, then a new status message under them holds the rest. turns: what r.turns held when head was made."""
     first = label(r.key)  # numbered before the parts that follow it
-    ids = [telegram.send(r.tid, p, reply=r.req, tag=lambda: label(r.key))[-1] for p in full[1:]]
+    ids = [telegram.send(r.tid, p, reply=r.req, md=True, tag=lambda: label(r.key))[-1] for p in full[1:]]
     new = telegram.send(r.tid, telegram.status_text(head, rest), reply=r.req, markup=telegram.stop_markup(r.key))[-1]
     with state.LOCK:
         moved = r.status == status
@@ -296,7 +296,7 @@ def split(r, status, head, turns, full, rest):
         return
     state.link(r.key, ids + [new])
     state.sess_update(r.key, working=new)  # what a restarted bot deletes
-    telegram.edit(status, f"{first}\n{full[0]}")
+    telegram.edit(status, full[0], md=True, head=first)
 
 
 def seen(r, now, cpu, age):

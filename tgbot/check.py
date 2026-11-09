@@ -595,6 +595,9 @@ def self_check():
     assert [m for m, _ in calls] == ["sendMessage", "sendMessage", "editMessageText"], calls
     assert calls[0][1]["text"].startswith(f"{pins.TITLES[70]} · #{n + 2}\n") and calls[1][1]["text"] == "head\n\n" + rest[0] and calls[1][1]["reply_markup"] == telegram.stop_markup(70), calls[:2]
     assert calls[2][1]["message_id"] == 500 and calls[2][1]["text"].startswith(f"{pins.TITLES[70]} · #{n + 1}\nold") and calls[2][1]["reply_markup"] is None, calls[2]
+    assert calls[0][1]["parse_mode"] == calls[2][1]["parse_mode"] == "HTML" and "parse_mode" not in calls[1][1], "moved parts are Claude's markdown as HTML, the status message stays plain"
+    fenced = telegram.overflow("head", ["```\n" + "code\n" * 3000 + "```", "latest"])[0]
+    assert len(fenced) > 1 and all(markdown.md_html(p).count("<pre>") == markdown.md_html(p).count("</pre>") == 1 for p in fenced), "a part never ends inside a ``` block"
     assert r.status == 602 and r.turns == rest + ["since"] and r.dirty and state.STATE["sessions"]["70"]["working"] == 602 and state.STATE["replies"]["601"] == state.STATE["replies"]["602"] == 70, (r.status, r.turns)
     calls = []
     r.status = None  # the run ended meanwhile: the new status message goes, the old one is already deleted
