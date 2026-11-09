@@ -178,7 +178,7 @@ To update, pull the new image and recreate the container: the dashboard's **Pull
 
 ## Security
 
-The bot is a shell in every dev container. It accepts exactly one Telegram user in exactly one group and drops everything else without answering. Claiming it needs the one-time code from the server's logs. It never logs message text or the token, never passes a prompt through a shell, runs as a non-root user with no published port (it only answers the dashboard's `/status` on port 8080 inside the Docker network), and only touches containers labeled `dockbench=true`.
+The bot is a shell in every dev container. It accepts exactly one Telegram user in exactly one group and drops everything else without answering. Claiming it needs the one-time code from the server's logs. It never logs message text or the token, never passes a prompt through a shell, runs as a non-root user with no published port (its only listener, the dashboard's `/status` on port 8080, has no auth and is reachable from every dev container on `devnet`, so it never returns ids, the setup code or the token), and only touches containers labeled `dockbench=true`.
 
 > [!WARNING]
 > The Docker socket gives root-equivalent access to the host, read-only mount or not. [DEV-README.md](DEV-README.md#security) explains why a socket proxy buys little and how to add one anyway.

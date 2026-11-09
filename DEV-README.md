@@ -4,11 +4,11 @@ The technical side of the bot: how it is built, how it behaves in the edge cases
 
 ## Architecture
 
-- No inbound traffic from outside. The bot long-polls Telegram over outbound HTTPS: no webhook, no published port, no reverse proxy. The only listener is `GET /status` on port 8080 for the dashboard, reachable inside the Docker network only.
+- No inbound traffic from outside. The bot long-polls Telegram over outbound HTTPS: no webhook, no published port, no reverse proxy. The only listener is `GET /status` on port 8080 for the dashboard, reachable inside `devnet` only, where every dev container can read it too.
 - Docker exec, nothing else. A session is `claude -p` executed in the dev container as its normal user, with the prompt passed as one argument. Screenshots go in through the container's archive API, and images come back the same way.
 - One JSON file of state. Topic bindings, the last pick per topic and which message belongs to which session live in one volume. Message text is never stored or logged.
 - No dependencies. Python standard library only, in a `python:3.13-alpine` image.
-- The container joins the `devnet` network only and publishes no port. It answers `GET /status` on port 8080 inside `devnet` for the [dashboard](https://github.com/Sander972/DockBench-Dashboard): bot username, whether owner and group are set, the bound topics with running and queued counts, and the last successful poll. It never returns ids, the setup code or the token.
+- The container joins the `devnet` network only and publishes no port. It answers `GET /status` on port 8080 inside `devnet` for the [dashboard](https://github.com/Sander972/DockBench-Dashboard): bot username, whether owner and group are set, the bound topics with running and queued counts, and the last successful poll. There is no auth, so any dev container on `devnet` can read it: it never returns ids, the setup code or the token.
 
 ## Behavior in detail
 
@@ -78,7 +78,7 @@ The bot is a shell in every dev container, so it is built to be hard to talk to:
 - Claiming needs the logs. Until an owner is set, the bot answers only `/setup <code>` in a private chat, with a random code printed in its log, so only someone who can read the server's logs can claim it.
 - Nothing sensitive is logged: update ids, thread ids, container names, session ids and exit codes, never message text, captions, file contents or the token.
 - No shell strings. The prompt is one element of the exec command array, after `--`. Topic names are checked against `^[A-Za-z0-9_.-]+$` before they become container names, and only containers with the label `dockbench=true` are ever used, so a topic called `telegram` or `dashboard` cannot reach the bot or the dashboard.
-- Non-root, no published port. The container runs as uid 1000 with only the socket's group, listens only for `/status` on the Docker network, and uses six Docker API calls: list containers, create and start an exec, inspect it, put and get an archive.
+- Non-root, no published port. The container runs as uid 1000 with only the socket's group, listens only for `/status` on `devnet` (no auth, readable by every dev container there), and uses six Docker API calls: list containers, create and start an exec, inspect it, put and get an archive.
 - The socket is root. It gives root-equivalent access to the host, and `:ro` would not change that. A socket proxy such as `tecnativa/docker-socket-proxy` buys little, because the `CONTAINERS=1`, `EXEC=1` and `POST=1` it needs also allow creating privileged containers. If you add one anyway, put it on a network that only the bot shares, **never on `devnet`**, set `DOCKER_HOST=tcp://<proxy>:2375` and drop the socket mount and `group_add`.
 
 ## Build it yourself
