@@ -3,6 +3,8 @@ services:
     image: ghcr.io/sander972/dockbench-telegram:latest
     container_name: dockbench-telegram
     init: true
+    # cores this container may run on; the dashboard sets 1-(N-1) so core 0 stays free for the host, empty means every core
+    cpuset: ${CPUSET:-}
     environment:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       TELEGRAM_GROUP_ID: ${TELEGRAM_GROUP_ID:-}

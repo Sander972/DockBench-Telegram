@@ -172,6 +172,7 @@ All settings are environment variables of the stack. [`.env.example`](.env.examp
 | `TELEGRAM_GROUP_ID` | no | The forum supergroup, `-100…`. Normally set by `/setup` in the group; setting it here pins the group and ignores the stored one. |
 | `TELEGRAM_OWNER_ID` | no | The only Telegram user the bot listens to. Normally set by `/setup <code>`; setting it here skips the code. |
 | `DOCKER_HOST` | no | Default `unix:///var/run/docker.sock`. A `tcp://` URL goes through a socket proxy (see [DEV-README.md](DEV-README.md#security)). |
+| `CPUSET` | no | Cores the bot may run on, as a Linux cpuset list (`1-3`). Empty (default) means every core. The DockBench Dashboard sets every core but 0, so core 0 stays free for the host. |
 
 To update, pull the new image and recreate the container: the dashboard's **Pull and restart** button, or redeploy the stack in Portainer with "pull latest image".
 
