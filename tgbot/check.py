@@ -718,6 +718,45 @@ def self_check():
         assert pins.pin_facts("new") == ({"from": "git"}, []) and pins.pin_facts("old") == ({"from": "git"}, [])
     finally:
         pins.git_info, pins.subrepos, pins.WORKSPACE = real_info, real_subs, real_ws
+
+    # the probes over HTTP: no exec while the agent answers on its port; the token is read once through the archive API and again after a 401; an agent without the routes (404) or without a token file is remembered per id, a connection failure is not
+    real_files, real_http = dockerapi.get_files, dockerapi.http_get
+    dockerapi.NAMES["new"] = "dockbench-new"
+    tok, reads, http, answers = {"new": b"tok1\n"}, [], [], {"pin-info": (200, b'{"git": {"branch": "main", "oid": "abc", "untracked": 0, "upstream": True, "gone": False, "ahead": 0, "add": 0, "del": 0, "files": 0, "repo": "shop"}, "subs": []}'.replace(b"True", b"true").replace(b"False", b"false")), "activity": (204, b""), "title": (200, b"Fix login"), "claude-key": (200, b"1:2:me@x\n")}
+
+    def fake_files(cid, path, limit):
+        reads.append(cid)
+        assert path == dockerapi.AGENT_TOKEN and limit == 4096, (path, limit)
+        if cid not in tok:
+            raise dockerapi.DockerError("GET /containers/new/archive: 404 no such file")
+        return [("", tok[cid])]
+
+    def fake_http(url, headers, timeout):
+        route = url.split("/", 3)[3].split("?")[0]
+        http.append((url, headers["Authorization"]))
+        if headers["Authorization"] != f"Bearer {tok['new'].strip().decode()}":
+            raise urllib.error.HTTPError(url, 401, "Unauthorized", {}, None)
+        if isinstance(answers[route], Exception):
+            raise answers[route]
+        return answers[route]
+    dockerapi.get_files, dockerapi.http_get = fake_files, fake_http
+    seen.clear()
+    assert claude.activity("new", "s") is None and claude.title("new", "s") == "Fix login" and pins.pin_facts("new")[0]["repo"] == "shop" and dockerapi.agent("new", ["claude-key"]) == (0, b"1:2:me@x\n")
+    assert seen == [] and reads == ["new"], (seen, reads)
+    assert [u.split("8080")[1] for u, _ in http] == ["/activity?session=s", "/title?session=s", "/pin-info?dir=%2Fhome%2Fdev%2Fworkspace", "/claude-key"], http
+    tok["new"] = b"tok2\n"  # the agent restarted: one 401, the token is read again, the probe answers
+    assert claude.title("new", "s") == "Fix login" and reads == ["new", "new"] and [a for _, a in http[-2:]] == ["Bearer tok1", "Bearer tok2"] and seen == [], (reads, http, seen)
+    answers["title"] = urllib.error.HTTPError("u", 404, "Not Found", {}, None)  # an agent without the routes: exec from now on, HTTP not asked again
+    n = len(http)
+    assert claude.title("new", "s") == "Fix login" and claude.title("new", "s") == "Fix login" and dockerapi.NO_HTTP == {"new"} and len(http) == n + 1 and [c[1] for _, c in seen] == ["title", "title"], (http[n:], seen)
+    dockerapi.NO_HTTP.clear(), dockerapi.TOKENS.clear(), seen.clear()
+    answers["title"] = OSError("connection refused")  # nothing answers this time: exec now, HTTP again next time
+    assert claude.title("new", "s") == "Fix login" and not dockerapi.NO_HTTP and [c[1] for _, c in seen] == ["title"], seen
+    del tok["new"]  # no token file: the image has an agent without the routes
+    dockerapi.TOKENS.clear(), seen.clear()
+    assert claude.title("new", "s") == "Fix login" and dockerapi.NO_HTTP == {"new"} and [c[1] for _, c in seen] == ["title"], seen
+    dockerapi.get_files, dockerapi.http_get = real_files, real_http
+    dockerapi.NAMES.clear(), dockerapi.TOKENS.clear(), dockerapi.NO_HTTP.clear()
     dockerapi.NO_AGENT.clear()
 
     # the usage message in General: sent and pinned once, then edited only when its text changed, sent again when deleted

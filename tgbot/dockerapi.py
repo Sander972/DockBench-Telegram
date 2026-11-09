@@ -6,9 +6,11 @@ import os
 import socket
 import tarfile
 import time
+import urllib.error
 import urllib.parse
+import urllib.request
 
-from .config import EXEC_ENV, WORKSPACE
+from .config import EXEC_ENV, WORKSPACE, log
 
 DOCKER_HOST = os.environ.get("DOCKER_HOST") or "unix:///var/run/docker.sock"
 
@@ -56,7 +58,9 @@ def docker(method, path, body=None, timeout=60, stream=False):
 def dev_containers():
     """The label filter keeps non-dev containers like dockbench-telegram and dockbench-dashboard out."""
     filters = urllib.parse.quote(json.dumps({"label": ["dockbench=true"]}))
-    return docker("GET", f"/containers/json?all=true&filters={filters}")
+    containers = docker("GET", f"/containers/json?all=true&filters={filters}")
+    NAMES.update({c["Id"]: c["Names"][0].lstrip("/") for c in containers if c.get("Names")})
+    return containers
 
 
 def project(c):
@@ -97,12 +101,67 @@ def exec_run(cid, cmd, timeout=60, env=EXEC_ENV):
 
 AGENT = "/usr/local/bin/dockbench-agent"
 NO_AGENT = set()  # ids of containers whose image has no dockbench-agent (built before it): their probes take the older execs
+# The agent also serves the probes on its port, behind a token it writes at start (the agent's TOKEN_FILE): a GET on devnet starts nothing in the container where an exec starts runc plus the command. The bot reads the token once per container through the archive API (no exec either) and again after a 401 (the agent restarted with a new one).
+AGENT_PORT = 8080
+AGENT_TOKEN = "/home/dev/.dockbench-agent-token"
+ROUTES = {"pin-info": "/pin-info?dir={}", "activity": "/activity?session={}", "title": "/title?session={}", "claude-key": "/claude-key"}
+NAMES = {}  # container id -> name, from the last dev_containers() listing; the name resolves on devnet
+TOKENS = {}  # container id -> its agent's token
+NO_HTTP = set()  # ids whose agent has no probe routes or no token file (an image from before them): exec
+
+
+def http_get(url, headers, timeout):
+    """(status, body) of a GET; raises urllib.error.HTTPError on 4xx/5xx and OSError (URLError included) when nothing answers."""
+    with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=timeout) as r:
+        return r.status, r.read()
+
+
+def token(cid):
+    """The agent's token in the container, None when there is none (an image before the probe routes, or the agent could not write it)."""
+    try:
+        files = get_files(cid, AGENT_TOKEN, 4096)
+    except (DockerError, tarfile.TarError, OSError):
+        return None
+    tok = files[0][1].strip() if files else b""
+    return tok.decode(errors="replace") if tok else None
+
+
+def agent_http(cid, args, timeout):
+    """(exit code, output) of the probe over HTTP, shaped like the exec's (204, the run is not there, is the subcommand's exit 3). None to take the exec: no name or token known for the container, an agent without the routes (remembered per id), or no answer this time."""
+    name = NAMES.get(cid)
+    if cid in NO_HTTP or not name:
+        return None
+    path = ROUTES[args[0]].format(*(urllib.parse.quote(a, safe="") for a in args[1:]))
+    for retry in (True, False):
+        tok = TOKENS.get(cid) or token(cid)
+        if not tok:
+            NO_HTTP.add(cid)
+            return None
+        TOKENS[cid] = tok
+        try:
+            status, body = http_get(f"http://{name}:{AGENT_PORT}{path}", {"Authorization": f"Bearer {tok}"}, timeout)
+            return (3 if status == 204 else 0), body
+        except urllib.error.HTTPError as e:
+            if e.code == 401 and retry:
+                TOKENS.pop(cid, None)
+                continue
+            if e.code == 404:
+                NO_HTTP.add(cid)
+            else:
+                log.warning("%s: agent %s answered %s, using exec", name, path.split("?")[0], e.code)
+            return None
+        except OSError:  # refused, name not resolved, timeout: the exec answers this pass, the next one asks again
+            return None
+    return None
 
 
 def agent(cid, args, timeout=60):
-    """(exit code, output) of `dockbench-agent <args>` in the container, one native process where the older probes ran a `python3 -c` script or several git execs. None when the image has no agent: the caller then takes its older execs. Remembered per container id, so an old container costs one failed exec, not one per probe (a recreated container gets a new id and is asked again)."""
+    """(exit code, output) of `dockbench-agent <args>` in the container: over HTTP when it answers there, else one native exec where the older probes ran a `python3 -c` script or several git execs. None when the image has no agent: the caller then takes its older execs. Remembered per container id, so an old container costs one failed exec, not one per probe (a recreated container gets a new id and is asked again)."""
     if cid in NO_AGENT:
         return None
+    r = agent_http(cid, args, timeout)
+    if r is not None:
+        return r
     code, out = exec_run(cid, [AGENT, *args], timeout)
     if code in (126, 127) or b"exec failed" in out:  # Docker's answer to a missing binary: 127 and "OCI runtime exec failed: ..." in the stream
         NO_AGENT.add(cid)
