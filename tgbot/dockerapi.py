@@ -99,15 +99,12 @@ def exec_run(cid, cmd, timeout=60, env=EXEC_ENV):
     return exec_exit(eid), out
 
 
-AGENT = "/usr/local/bin/dockbench-agent"
-NO_AGENT = set()  # ids of containers whose image has no dockbench-agent (built before it): their probes take the older execs
-# The agent also serves the probes on its port, behind a token it writes at start (the agent's TOKEN_FILE): a GET on devnet starts nothing in the container where an exec starts runc plus the command. The bot reads the token once per container through the archive API (no exec either) and again after a 401 (the agent restarted with a new one).
+# The image's dockbench-agent serves the probes on its port, behind a token it writes at start (the agent's TOKEN_FILE): a GET on devnet starts nothing in the container. The bot reads the token once per container through the archive API (no exec) and again after a 401 (the agent restarted with a new one). Images from before the probe routes (2026-11-09) are not supported: their probes answer nothing.
 AGENT_PORT = 8080
 AGENT_TOKEN = "/home/dev/.dockbench-agent-token"
 ROUTES = {"pin-info": "/pin-info?dir={}", "activity": "/activity?session={}", "title": "/title?session={}", "claude-key": "/claude-key"}
 NAMES = {}  # container id -> name, from the last dev_containers() listing; the name resolves on devnet
 TOKENS = {}  # container id -> its agent's token
-NO_HTTP = set()  # ids whose agent has no probe routes or no token file (an image from before them): exec
 
 
 def http_get(url, headers, timeout):
@@ -126,16 +123,15 @@ def token(cid):
     return tok.decode(errors="replace") if tok else None
 
 
-def agent_http(cid, args, timeout):
-    """(exit code, output) of the probe over HTTP, shaped like the exec's (204, the run is not there, is the subcommand's exit 3). None to take the exec: no name or token known for the container, an agent without the routes (remembered per id), or no answer this time."""
+def agent(cid, args, timeout=60):
+    """(exit code, output) of the dockbench-agent probe `args` over HTTP, shaped like its subcommand's (204, the run is not there, is exit 3). None when it gives nothing this time: no name or token known for the container (an image from before the routes has no token file), an error status, or no answer; the next call asks again."""
     name = NAMES.get(cid)
-    if cid in NO_HTTP or not name:
+    if not name:
         return None
     path = ROUTES[args[0]].format(*(urllib.parse.quote(a, safe="") for a in args[1:]))
     for retry in (True, False):
         tok = TOKENS.get(cid) or token(cid)
         if not tok:
-            NO_HTTP.add(cid)
             return None
         TOKENS[cid] = tok
         try:
@@ -145,28 +141,12 @@ def agent_http(cid, args, timeout):
             if e.code == 401 and retry:
                 TOKENS.pop(cid, None)
                 continue
-            if e.code == 404:
-                NO_HTTP.add(cid)
-            else:
-                log.warning("%s: agent %s answered %s, using exec", name, path.split("?")[0], e.code)
+            if e.code != 404:  # 404: an agent from before the routes, which pins reports
+                log.warning("%s: agent %s answered %s", name, path.split("?")[0], e.code)
             return None
-        except OSError:  # refused, name not resolved, timeout: the exec answers this pass, the next one asks again
+        except OSError:  # refused, name not resolved, timeout
             return None
     return None
-
-
-def agent(cid, args, timeout=60):
-    """(exit code, output) of `dockbench-agent <args>` in the container: over HTTP when it answers there, else one native exec where the older probes ran a `python3 -c` script or several git execs. None when the image has no agent: the caller then takes its older execs. Remembered per container id, so an old container costs one failed exec, not one per probe (a recreated container gets a new id and is asked again)."""
-    if cid in NO_AGENT:
-        return None
-    r = agent_http(cid, args, timeout)
-    if r is not None:
-        return r
-    code, out = exec_run(cid, [AGENT, *args], timeout)
-    if code in (126, 127) or b"exec failed" in out:  # Docker's answer to a missing binary: 127 and "OCI runtime exec failed: ..." in the stream
-        NO_AGENT.add(cid)
-        return None
-    return code, out
 
 
 def get_files(cid, path, limit):

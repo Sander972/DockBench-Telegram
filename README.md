@@ -65,7 +65,7 @@ The bot long-polls Telegram over outbound HTTPS and runs `claude -p` in your dev
 
 You need:
 
-- a server where your [DockBench](https://github.com/Sander972/DockBench) containers run, with Docker (the published image is `linux/arm64`; [build it](DEV-README.md#build-it-yourself) for x86);
+- a server where your [DockBench](https://github.com/Sander972/DockBench) containers run, with Docker (the published image is `linux/arm64`; [build it](DEV-README.md#build-it-yourself) for x86); the dev containers need a DockBench image from 2026-11-09 or later, or their pinned status, titles and idle watchdog stay empty;
 - a Telegram account, and a bot token from [@BotFather](https://t.me/BotFather).
 
 > [!TIP]

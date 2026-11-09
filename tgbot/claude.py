@@ -17,38 +17,9 @@ def claude_cmd(cfg, prompt, sid, resume, out):
             "--resume" if resume else "--session-id", sid, "--", prompt]
 
 
-# The fallback for images without dockbench-agent, whose `activity` subcommand answers the same. Run in the container with a session id: prints the CPU seconds used so far by its run (the timeout wrapper and all its descendants, reaped children included), then the seconds since the session's transcript or one of its subagents' was last written (-1: none yet). Exits 3 when the run is not found.
-ACTIVITY = r"""
-import glob, os, sys, time
-sid, procs, top = sys.argv[1], {}, None
-for d in glob.glob("/proc/[0-9]*"):
-    try:
-        with open(d + "/cmdline", "rb") as f:
-            cmd = f.read()
-        with open(d + "/stat") as f:
-            st = f.read().rpartition(")")[2].split()
-    except OSError:
-        continue
-    procs[int(d[6:])] = (int(st[1]), sum(map(int, st[11:15])))
-    if cmd.startswith(b"timeout\0-k\0") and b"\0claude\0-p\0" in cmd and ("\0%s\0--\0" % sid).encode() in cmd:
-        top = int(d[6:])
-if top is None:
-    sys.exit(3)
-tree = {top}
-while True:
-    new = {p for p, (pp, _) in procs.items() if pp in tree} - tree
-    if not new:
-        break
-    tree |= new
-home = os.path.expanduser("~/.claude/projects/*/")
-mt = [os.path.getmtime(f) for f in glob.glob(home + sid + ".jsonl") + glob.glob(home + sid + "/subagents/*.jsonl")]
-print(sum(procs[p][1] for p in tree) / os.sysconf("SC_CLK_TCK"), int(time.time() - max(mt)) if mt else -1)
-"""
-
-
 def activity(cid, sid):
     """(CPU seconds used so far, seconds since the session last wrote its transcript or None) of session sid's run in the container, or None when it is not found."""
-    code, out = dockerapi.agent(cid, ["activity", sid]) or dockerapi.exec_run(cid, ["python3", "-c", ACTIVITY, sid])
+    code, out = dockerapi.agent(cid, ["activity", sid]) or (None, b"")
     try:
         cpu, age = out.split()
         return (float(cpu), int(age) if int(age) >= 0 else None) if code == 0 else None
@@ -56,25 +27,9 @@ def activity(cid, sid):
         return None
 
 
-# The fallback for images without dockbench-agent, whose `title` subcommand answers the same. Run in the container with a session id: prints the title Claude Code gave the session, from the last `ai-title` line of its transcript (written during its first run, also by `claude -p`; seen with Claude Code 2.1.306), nothing when it has none yet.
-TITLE = r"""
-import glob, json, os, sys
-title = ""
-for f in glob.glob(os.path.expanduser("~/.claude/projects/*/") + sys.argv[1] + ".jsonl"):
-    with open(f, errors="replace") as fh:
-        for line in fh:
-            if '"type":"ai-title"' in line:
-                try:
-                    title = json.loads(line).get("aiTitle") or title
-                except (ValueError, AttributeError):
-                    pass
-sys.stdout.write(title if isinstance(title, str) else "")
-"""
-
-
 def title(cid, sid):
     """The title Claude Code gave session sid, on one line and at most TITLE_MAX characters; "" when it has none yet."""
-    code, out = dockerapi.agent(cid, ["title", sid]) or dockerapi.exec_run(cid, ["python3", "-c", TITLE, sid])
+    code, out = dockerapi.agent(cid, ["title", sid]) or (None, b"")
     return " ".join(out.decode(errors="replace").split())[:TITLE_MAX] if code == 0 else ""
 
 

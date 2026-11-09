@@ -32,7 +32,7 @@ def account(cid):
 
 
 def account_cached(cid):
-    """account(), reused while the container's sign-in fingerprint (`dockbench-agent claude-key`: the credentials file's size and time, the account email) is unchanged. Images without the agent ask `claude auth status` on every pass, as before."""
+    """account(), reused while the container's sign-in fingerprint (`dockbench-agent claude-key`: the credentials file's size and time, the account email) is unchanged. When the agent gives no fingerprint, `claude auth status` runs on every pass."""
     r = dockerapi.agent(cid, ["claude-key"])
     key = r[1] if r and r[0] == 0 else None
     if key is not None and ACCOUNTS.get(cid, (None,))[0] == key:

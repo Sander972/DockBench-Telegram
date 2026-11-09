@@ -82,15 +82,13 @@ def subrepos(cid):
 
 
 def pin_facts(cid):
-    """(git_info(), subrepos()) of the container in one exec of dockbench-agent, which reads git in-process (only `git diff HEAD --numstat` still runs, and only while tracked files changed); the older execs (3 git, a find and one git per subrepo) for an image without it, or when its answer is unusable."""
+    """(git_info(), subrepos()) of the container from dockbench-agent's pin-info route, which reads git in-process (only `git diff HEAD --numstat` still runs, and only while tracked files changed). Raises when it gives nothing usable, so refresh() leaves the pin as it was and logs it once."""
     r = dockerapi.agent(cid, ["pin-info", WORKSPACE])
-    if r and r[0] == 0:
-        try:
-            d = json.loads(r[1])
-            return d["git"], d["subs"]
-        except (ValueError, KeyError, TypeError):
-            log.warning("dockbench-agent pin-info answered something else, using git execs")
-    return git_info(cid), subrepos(cid)
+    try:
+        d = json.loads(r[1]) if r and r[0] == 0 else None
+        return d["git"], d["subs"]
+    except (ValueError, KeyError, TypeError):
+        raise RuntimeError("dockbench-agent pin-info gave no usable answer (an image from before 2026-11-09? update it)") from None
 
 
 def push_note(g):
