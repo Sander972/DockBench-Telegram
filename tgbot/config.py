@@ -53,7 +53,7 @@ The pinned message of each topic shows the workspace repo, its branch, the commi
 /push [repo] - push the commits of the workspace repo, or of a repo folder inside it, to its upstream (asks first; with several to push, asks which; also the Push buttons on the pin)
 /clean - delete the messages of the sessions of this topic that are not running (requests, answers, status messages); they can no longer be continued from Telegram (also the Clean button on the pin, after a confirmation). As a reply to a session (also /clear), only that one
 /bind <PROJECT> - link this topic to dockbench-<PROJECT>
-/setup - check what the bot needs in this group
+/setup - check what the bot needs in this group (also /start, which the dashboard's claim and Add to group links send)
 /help
 Claude's skills and slash commands are in the / menu (as /name_with_underscores), grouped: 🧩 skills, ⚙️ other commands, then 🔌 one block per plugin. Any other /command goes to Claude as a prompt too."""
 SETUP_STEPS = """You are the owner. Next:

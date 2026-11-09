@@ -156,7 +156,7 @@ A run that looks hung is killed after 15 minutes without activity, and a busy on
 | `/push [repo]` | Push the workspace repo, or a repo folder inside it, after a confirmation tap. With several repos to push and no name, asks which. |
 | `/clean` | Delete the messages of this topic's idle sessions. Those sessions can no longer be continued from Telegram; they stay in VS Code. The pin's **🧹 Clean idle sessions (N)** button does the same. As a reply to a session's message (`/clean` or `/clear`): only that session, if it is not running. |
 | `/bind <PROJECT>` | Link this topic to `dockbench-<PROJECT>`. |
-| `/setup` | Re-run the setup checklist for the group. `/setup move` in another forum group moves the bot there. |
+| `/setup` | Re-run the setup checklist for the group. `/setup move` in another forum group moves the bot there. `/start` does the same: the dashboard's claim and Add to group links send it. |
 | `/help` | The command list. Also what the bot answers in the General topic. |
 
 Anything else, including slash commands the bot does not know, is the prompt.
@@ -178,7 +178,7 @@ To update, pull the new image and recreate the container: the dashboard's **Pull
 
 ## Security
 
-The bot is a shell in every dev container. It accepts exactly one Telegram user in exactly one group and drops everything else without answering. Claiming it needs the one-time code from the server's logs. It never logs message text or the token, never passes a prompt through a shell, runs as a non-root user with no inbound port, and only touches containers labeled `dockbench=true`.
+The bot is a shell in every dev container. It accepts exactly one Telegram user in exactly one group and drops everything else without answering. Claiming it needs the one-time code from the server's logs. It never logs message text or the token, never passes a prompt through a shell, runs as a non-root user with no published port (it only answers the dashboard's `/status` on port 8080 inside the Docker network), and only touches containers labeled `dockbench=true`.
 
 > [!WARNING]
 > The Docker socket gives root-equivalent access to the host, read-only mount or not. [DEV-README.md](DEV-README.md#security) explains why a socket proxy buys little and how to add one anyway.
