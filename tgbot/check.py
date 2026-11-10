@@ -110,32 +110,17 @@ def self_check():
     bad = onboarding.checklist("b", False, True, False, False, "connect {x}")
     assert bad.count("\n❌") == 4 and "Pin messages" in bad and "Delete messages" in bad and "Topics are off" in bad and "connect {x}" in bad and bad.endswith("/setup@b here again."), bad
 
-    # pinned status: git parsing, the origin name without its credential, the text
-    assert pins.parse_status("# branch.oid 0123456789ab\n# branch.head main\n1 .M N... 100644 100644 100644 a b f.py\n? new.txt\n? tmp/\n") == {"branch": "main", "oid": "0123456789ab", "untracked": 2, "upstream": False, "gone": False, "ahead": 0}
-    assert pins.parse_status("# branch.oid 0123456789ab\n# branch.head main\n# branch.upstream origin/main\n# branch.ab +3 -1\n") == {"branch": "main", "oid": "0123456789ab", "untracked": 0, "upstream": True, "gone": False, "ahead": 3}
-    gone = pins.parse_status("# branch.oid 0123456789ab\n# branch.head feat\n# branch.upstream origin/feat\n")  # git leaves out branch.ab when the upstream ref is gone
-    assert (gone["upstream"], gone["gone"], gone["ahead"]) == (False, True, 0), gone
-    assert pins.parse_status("warning: x\n# branch.oid 0123456789ab\n# branch.head (detached)\n")["branch"] == "detached 0123456"
-    assert pins.parse_numstat("3\t1\ta.py\n-\t-\timg.png\n10\t0\tb.py\nwarning: CRLF\n") == {"add": 13, "del": 1, "files": 3}
-    assert pins.repo_name("https://user:tok@github.com/Sander972/DockBench-telegram.git\n") == "DockBench-telegram" and pins.repo_name("git@github.com:a/b") == "b" and pins.repo_name("/srv/repo/") == "repo"
+    # pinned status: the text
     g = {"repo": "r", "branch": "main", "add": 0, "del": 0, "files": 0, "untracked": 0, "upstream": True, "gone": False, "ahead": 0}
     assert pins.pin_text("a", "running", dict(g, upstream=False, gone=True), []).split("\n")[1] == "🌿 main · upstream gone"
     assert pins.pin_text("a", "running", g, []) == "📦 r (a)\n🌿 main\n✏️ clean\nsessions: none" and pins.pin_text("r", "running", g, []).startswith("📦 r\n") and pins.pin_markup(7, g) is None
     assert pins.pin_text("a", "running", dict(g, ahead=2), []).split("\n")[1] == "🌿 main · ↑2 to push"
     assert pins.pin_text("a", "running", dict(g, upstream=False), []).split("\n")[1] == "🌿 main · no upstream" and pins.pin_text("a", "running", dict(g, upstream=False, branch="detached 0123456"), []).split("\n")[1] == "🌿 detached 0123456"
     assert pins.pin_markup(7, dict(g, ahead=1)) == {"inline_keyboard": [[{"text": "⬆ r (1)", "callback_data": "push:7"}]]} and pins.pin_markup(7, dict(g, ahead=2, upstream=False)) is None and pins.pin_markup(7, None) is None
-    # subrepos: folders one level inside the workspace holding a .git, a line and a Push button each when there is something to push
-    assert pins.parse_subrepos("/home/dev/workspace/B/.git\n/home/dev/workspace/A/.git\nfind: '/home/dev/workspace/x': Permission denied\n/home/dev/workspace/.git\n/home/dev/workspace/a/b/.git\n/elsewhere/C/.git\n") == ["A", "B"]
+    # subrepos: a line and a Push button each when there is something to push
     subs = [dict(g, dir="A", ahead=1), dict(g, dir="B"), dict(g, dir="C", branch="feat", upstream=False), dict(g, dir="D", branch="detached 0123456", upstream=False), dict(g, dir="E" * 60, ahead=3)]
     assert pins.pin_text("a", "running", g, [], subs=subs).split("\n")[3:6] == ["📂 A · main · ↑1 to push", "📂 C · feat · no upstream", f"📂 {'E' * 60} · main · ↑3 to push"] and "📂" not in pins.pin_text("a", "exited", None, [], subs=subs)
     assert pins.pin_markup(7, dict(g, ahead=2), subs) == {"inline_keyboard": [[{"text": "⬆ r (2)", "callback_data": "push:7"}], [{"text": "⬆ A (1)", "callback_data": "push:7:A"}]]}, "no button for a folder name too long for callback_data"
-    real_exec = dockerapi.exec_run
-    execs = []
-    dockerapi.exec_run = lambda cid, cmd, timeout=60, env=None: execs.append(cmd) or ((1, b"/home/dev/workspace/A/.git\n/home/dev/workspace/B/.git\nfind: denied\n") if cmd[0] == "find" else (0, b"# branch.oid 0123456789ab\n# branch.head main\n# branch.upstream origin/main\n# branch.ab +2 -0\n") if "/home/dev/workspace/A" in cmd else (128, b"fatal: not a git repository"))
-    try:
-        assert pins.subrepos("cid") == [{"branch": "main", "oid": "0123456789ab", "untracked": 0, "upstream": True, "gone": False, "ahead": 2, "dir": "A"}] and execs[1] == ["git", "-C", "/home/dev/workspace/A", "status", "--porcelain=v2", "--branch", "--untracked-files=no"], execs
-    finally:
-        dockerapi.exec_run = real_exec
     assert push.scrub("To https://x:tok@github.com/a/b.git\n   1..2  main -> main\nTo git@github.com:a/b.git\nfatal: 'ssh://h/r' denied") == "To <remote>\n   1..2  main -> main\nTo <remote>\nfatal: <remote> denied"
     busy = pins.pin_text("a", "running", dict(g, add=42, files=1, untracked=2), [("🟢 #1", "opus", "high", "auto", 4, 1, "https://t.me/c/1/7/100", None), ("🟥 #2", "haiku", "low", "plan", None, 0, None, None), ("💙 #3", "sonnet", "max", "bypassPermissions", 0, 0, None, None)])
     assert busy.split("\n")[2:] == ["✏️ +42 −0 in 1 file, 2 untracked", "sessions:", "🟢 #1 👨‍💻 4m · opus · high · auto · 1 queued · <a href=\"https://t.me/c/1/7/100\">last message</a>", "🟥 #2 👀 queued · haiku · low · plan", "💙 #3 👨‍💻 &lt;1m · sonnet · max · bypassPermissions"], busy
@@ -449,10 +434,14 @@ def self_check():
     state.ACTIVE.clear()
     dockerapi.container = lambda name: {"Id": "cid", "State": "running"}
     ahead = {"repo": "r", "branch": "main", "oid": "0123456789abcdef", "upstream": True, "gone": False, "ahead": 2}
-    pins.git_info = lambda cid: dict(ahead)
-    subs = []
-    pins.subrepos = lambda cid: [dict(s) for s in subs]
-    dockerapi.exec_run =lambda cid, cmd, timeout=60, env=None: pushed.append((cmd, env)) or (0, b"To https://x:tok@github.com/a/r.git\n   1..2  main -> main\n")
+    subs, real_agent = [], dockerapi.agent
+    dockerapi.agent = lambda cid, args, timeout=60: (0, json.dumps({"git": ahead, "subs": subs}).encode()) if args == ["pin-info", WORKSPACE] else None  # the repo state comes from the agent, never a git exec
+
+    def git_push(cid, cmd, timeout=60, env=None):
+        assert cmd[:3] == ["timeout", "120", "git"] and cmd[-1] == "push", f"push ran an exec other than git push: {cmd}"
+        pushed.append((cmd, env))
+        return 0, b"To https://x:tok@github.com/a/r.git\n   1..2  main -> main\n"
+    dockerapi.exec_run = git_push
     push.spawn = lambda target, tid, *a: target(tid, *a)  # same thread, so the test can read the result
     routing.handle({"update_id": 5, "message": topic_msg(400, "/push")}, {})
     assert "Push 2 commits of branch main of r" in calls[-1][1]["text"] and [b["callback_data"] for b in calls[-1][1]["reply_markup"]["inline_keyboard"][0]] == ["pushgo:7:0123456789ab", "pushno"], calls[-1]
@@ -501,6 +490,14 @@ def self_check():
     assert calls[-1][1]["text"] == "No repo nope in the workspace of dockbench-a." and len(pushed) == 1, calls[-1]
     tap("pushgo:7:abcdef012345:B", 900)
     assert pushed[-1][0] == ["timeout", "120", "git", "-C", "/home/dev/workspace/B", "push"] and calls[-2][1]["text"].startswith("✅ pushed main of B"), (pushed, calls[-2])
+    # the agent gives no answer (an image from before pin-info): /push says so and runs nothing
+    dockerapi.agent = lambda cid, args, timeout=60: None
+    n = len(pushed)
+    push.ask(7)
+    assert calls[-1][1]["text"] == "Could not read the repo state of this container (dockbench-agent gave no answer): update its image." and len(pushed) == n, calls[-1]
+    routing.handle({"update_id": 11, "message": topic_msg(410, "/push")}, {})
+    assert calls[-1][1]["text"].startswith("Could not read the repo state") and len(pushed) == n, calls[-1]
+    dockerapi.agent = real_agent
 
     # /clean: deletes the recorded messages of this topic's idle sessions only, in batches, one by one when a batch is refused; a session with a message left is kept for a retry
     state.STATE["sessions"] = {"10": {"tid": 7}, "20": {"tid": 7}, "30": {"tid": 7}, "40": {"tid": 8}, "50": {"tid": 7, "working": 52}}

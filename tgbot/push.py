@@ -19,6 +19,14 @@ def running_in(name):
         return any(r.q.unfinished_tasks and (state.STATE["sessions"].get(str(r.key)) or {}).get("name") == name for r in state.ACTIVE.values())
 
 
+def facts(cid):
+    """(git, subs, None) of the container from the agent's pin-info route, else (None, [], the reason to show): no exec, `git push` is the only process /push starts."""
+    try:
+        return *pins.pin_facts(cid), None
+    except RuntimeError:
+        return None, [], "Could not read the repo state of this container (dockbench-agent gave no answer): update its image."
+
+
 def check(tid, sub=None):
     """(name, container id, git info, None) when the topic's workspace, or its subrepo in folder sub, has commits to push, else (.., the reason)."""
     name = state.settings(tid).get("name")
@@ -29,14 +37,15 @@ def check(tid, sub=None):
         return name, None, None, f"dockbench-{name} is {c['State'] if c else 'not found'}, nothing pushed."
     if running_in(name):
         return name, None, None, f"A session is running in dockbench-{name}: push once it is done."
+    g, subs, why = facts(c["Id"])
+    if why:
+        return name, None, None, why
     if sub:
-        g = next((dict(s, repo=sub) for s in pins.subrepos(c["Id"]) if s["dir"] == sub), None)
+        g = next((dict(s, repo=sub) for s in subs if s["dir"] == sub), None)
         if g is None:
             return name, None, None, f"No repo {sub} in the workspace of dockbench-{name}."
         if not pins.fits(tid, sub):
             return name, None, None, f"The folder name {sub} is too long for a Telegram button: push it from VS Code."
-    else:
-        g = pins.git_info(c["Id"])
     if g is None:
         return name, None, None, "The workspace is not a git repo."
     if not g["upstream"]:
@@ -52,7 +61,9 @@ def pick(tid, arg):
     c = dockerapi.container(name) if name else None
     if not c or c["State"] != "running":
         return ask(tid)  # check() says why
-    g, subs = pins.git_info(c["Id"]), pins.subrepos(c["Id"])
+    g, subs, why = facts(c["Id"])
+    if why:
+        return telegram.send(tid, why)
     if arg:
         return ask(tid, None if g and arg == g["repo"] and arg not in [s["dir"] for s in subs] else arg)
     buttons = (pins.pin_markup(tid, g, subs) or {}).get("inline_keyboard", [])

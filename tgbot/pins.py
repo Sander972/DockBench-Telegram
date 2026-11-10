@@ -15,74 +15,8 @@ TITLES = {}  # session key -> the title Claude Code gave it; memory only, never 
 UNTITLED = set()  # idle session keys whose transcript had no title when read, not read again until they run again
 
 
-def parse_status(out):
-    """Branch, HEAD commit, untracked count, whether the branch has a usable upstream, whether its upstream is gone, and how many commits it is ahead of it, from `git status --porcelain=v2 --branch`. Git leaves out `# branch.ab` when the upstream ref is gone (a remote branch deleted after a merge). Other lines (tracked changes, a stray stderr warning) are ignored."""
-    head, oid, untracked, named, ahead = None, "", 0, False, None
-    for line in out.splitlines():
-        if line.startswith("# branch.upstream "):
-            named = True
-        elif line.startswith("# branch.ab +") and line.split()[2][1:].isdigit():
-            ahead = int(line.split()[2][1:])
-        elif line.startswith("# branch.head "):
-            head = line[len("# branch.head "):]
-        elif line.startswith("# branch.oid "):
-            oid = line[len("# branch.oid "):]
-        elif line.startswith("? "):
-            untracked += 1
-    return {"branch": f"detached {oid[:7]}" if head == "(detached)" else head or "?", "oid": oid, "untracked": untracked, "upstream": named and ahead is not None, "gone": named and ahead is None, "ahead": ahead or 0}
-
-
-def parse_numstat(out):
-    """Added and deleted lines and changed files from `git diff HEAD --numstat`; a binary file counts as a file with no lines."""
-    add = dele = files = 0
-    for line in out.splitlines():
-        parts = line.split("\t")
-        if len(parts) < 3 or not all(p.isdigit() or p == "-" for p in parts[:2]):
-            continue
-        files += 1
-        add += int(parts[0]) if parts[0].isdigit() else 0
-        dele += int(parts[1]) if parts[1].isdigit() else 0
-    return {"add": add, "del": dele, "files": files}
-
-
-def repo_name(url):
-    """Last path part of the origin URL without .git: the URL may hold a credential, so only this part is ever shown."""
-    name = url.strip().rstrip("/").replace(":", "/").rsplit("/", 1)[-1]
-    return name[:-4] if name.endswith(".git") else name or "workspace"
-
-
-def git_info(cid):
-    """Git facts of the container's workspace, None when it is not a git repo. Plain argv execs as dev, no shell."""
-    code, out = dockerapi.exec_run(cid, ["git", "status", "--porcelain=v2", "--branch"])
-    if code != 0:
-        return None
-    info = parse_status(out.decode(errors="replace"))
-    code, out = dockerapi.exec_run(cid, ["git", "diff", "HEAD", "--numstat"])
-    info.update(parse_numstat(out.decode(errors="replace") if code == 0 else ""))  # fails before the first commit: no HEAD
-    code, out = dockerapi.exec_run(cid, ["git", "remote", "get-url", "origin"])
-    info["repo"] = repo_name(out.decode(errors="replace")) if code == 0 else "workspace"
-    return info
-
-
-def parse_subrepos(out):
-    """Folder names of the repos one level inside the workspace, from `find` lines `<WORKSPACE>/<folder>/.git`; anything else (a `find` error on stderr) is ignored."""
-    head = WORKSPACE + "/"
-    return sorted({line[len(head):-5] for line in out.splitlines() if line.startswith(head) and line.endswith("/.git") and "/" not in line[len(head):-5] and line[len(head):-5]})
-
-
-def subrepos(cid):
-    """Branch and push facts of each repo one level inside the workspace (the repos of a multi-repo workspace), sorted by folder, `dir` = the folder name. Their uncommitted changes are not read."""
-    code, out = dockerapi.exec_run(cid, ["find", WORKSPACE, "-mindepth", "2", "-maxdepth", "2", "-name", ".git"])  # exit 1 on an unreadable folder, the lines found still count
-    subs = []
-    for d in parse_subrepos(out.decode(errors="replace")):
-        code, out = dockerapi.exec_run(cid, ["git", "-C", f"{WORKSPACE}/{d}", "status", "--porcelain=v2", "--branch", "--untracked-files=no"])
-        if code == 0:
-            subs.append(dict(parse_status(out.decode(errors="replace")), dir=d))
-    return subs
-
-
 def pin_facts(cid):
-    """(git_info(), subrepos()) of the container from dockbench-agent's pin-info route, which reads git in-process (only `git diff HEAD --numstat` still runs, and only while tracked files changed). Raises when it gives nothing usable, so refresh() leaves the pin as it was and logs it once."""
+    """(git, subs) of the container from dockbench-agent's pin-info route, which reads git in-process (only `git diff HEAD --numstat` still runs, and only while tracked files changed): git is the workspace repo's facts (branch, oid, untracked, upstream, gone, ahead, add, del, files, repo) or None when it is not a repo, subs the same branch facts of each repo one folder inside it, sorted, with `dir` its folder name. Raises when it gives nothing usable, so refresh() leaves the pin as it was and logs it once."""
     r = dockerapi.agent(cid, ["pin-info", WORKSPACE])
     try:
         d = json.loads(r[1]) if r and r[0] == 0 else None
@@ -121,7 +55,7 @@ def anchor(link, title=None):
 
 
 def pin_text(name, health, git, sessions, idle=(), subs=()):
-    """Telegram HTML: every plain part escaped (a branch name may hold `<` or `&`), each session's link a "last message" anchor. health: container state; git: git_info() or None; sessions: (badge, model, effort, permission mode, minutes running or None when queued, queued behind, link, title or None); idle: (badge, model, effort, permission mode, seconds since its last prompt, link, title or None), newest first, only the first PIN_IDLE listed; subs: subrepos(), only those with something to say about pushing are listed."""
+    """Telegram HTML: every plain part escaped (a branch name may hold `<` or `&`), each session's link a "last message" anchor. health: container state; git: pin_facts()'s git or None; sessions: (badge, model, effort, permission mode, minutes running or None when queued, queued behind, link, title or None); idle: (badge, model, effort, permission mode, seconds since its last prompt, link, title or None), newest first, only the first PIN_IDLE listed; subs: pin_facts()'s subs, only those with something to say about pushing are listed."""
     repo = git["repo"] if health == "running" and git else name
     lines = [f"📦 {repo}" + ("" if repo == name else f" ({name})")]
     if health != "running":
