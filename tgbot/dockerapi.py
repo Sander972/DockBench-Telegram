@@ -1,4 +1,4 @@
-"""Docker Engine API over the unix socket (or tcp:// via DOCKER_HOST): dev containers, exec, archive upload."""
+"""Docker Engine API over the unix socket (or tcp:// via DOCKER_HOST): dev containers (followed through the events stream), exec, archive upload."""
 import http.client
 import io
 import json
@@ -55,12 +55,56 @@ def docker(method, path, body=None, timeout=60, stream=False):
     return json.loads(data) if data else None
 
 
-def dev_containers():
+CACHE = None  # the last list_containers() listing
+LIVE = False  # an events stream is open, so every container change lists again and CACHE is current
+# what changes the listing; not exec_*, so the bot's own execs make no event
+EVENTS = {"type": ["container"], "label": ["dockbench=true"], "event": ["create", "start", "die", "destroy", "rename", "pause", "unpause"]}
+
+
+def list_containers():
     """The label filter keeps non-dev containers like dockbench-telegram and dockbench-dashboard out."""
+    global CACHE
     filters = urllib.parse.quote(json.dumps({"label": ["dockbench=true"]}))
     containers = docker("GET", f"/containers/json?all=true&filters={filters}")
     NAMES.update({c["Id"]: c["Names"][0].lstrip("/") for c in containers if c.get("Names")})
+    CACHE = containers
     return containers
+
+
+def dev_containers():
+    """The dev containers: the cached listing while the events stream keeps it current, else a new one. Callers only read it."""
+    return CACHE if LIVE else list_containers()
+
+
+def watch_once(on_change):
+    """One events stream's lifetime: list on connect and after every event, calling on_change() each time; returns when the stream ends, raises when it fails (a socket timeout after 10 quiet minutes, a proxy's cut, the daemon going away). The stream is opened before the first listing, so no change between the two is lost."""
+    global LIVE
+    try:
+        with docker("GET", f"/events?filters={urllib.parse.quote(json.dumps(EVENTS))}", timeout=600, stream=True) as resp:
+            list_containers()
+            LIVE = True
+            on_change()
+            for line in resp:
+                if line.strip():
+                    list_containers()
+                    on_change()
+    finally:
+        LIVE = False
+
+
+def watch(on_change):
+    """Own thread: watch_once() for ever, 5 s between streams, a failure logged once per distinct message; dev_containers() lists directly meanwhile."""
+    last = None
+    while True:
+        try:
+            watch_once(on_change)
+            err = "stream ended"
+        except Exception as e:
+            err = f"{type(e).__name__}: {e}"
+        if err != last:
+            log.warning("docker events: %s, listing directly until it is back", err)
+        last = err
+        time.sleep(5)
 
 
 def project(c):

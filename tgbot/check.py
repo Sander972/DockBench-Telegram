@@ -9,6 +9,7 @@ import threading
 import time
 import types
 import urllib.error
+import urllib.parse
 import urllib.request
 
 from . import claude, commands, dockerapi, markdown, onboarding, pins, push, routing, runs, state, status, telegram, topics, usage
@@ -51,6 +52,54 @@ def self_check():
     except dockerapi.DockerError:
         pass
     dockerapi.docker = real_docker
+
+    # the events stream: dev_containers() lists while no stream is live, serves the cache while one is, and lists again on connect and after every event; a failed stream leaves it listing
+    listed, opened = [], []
+
+    class Stream:
+        def __init__(self, lines, error=None):
+            self.lines, self.error = lines, error
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def __iter__(self):
+            yield from self.lines
+            if self.error:
+                raise self.error
+    streams = [Stream([b'{"Action":"start"}\n', b"\n", b'{"Action":"die"}\n']), Stream([], TimeoutError("timed out"))]
+
+    def events_docker(method, path, body=None, timeout=60, stream=False):
+        if path.startswith("/events"):
+            opened.append((path, timeout, stream))
+            return streams.pop(0)
+        listed.append(path)
+        return [{"Id": "c1", "Names": ["/dockbench-a"], "State": "running"}]
+    dockerapi.docker, dockerapi.CACHE, dockerapi.LIVE = events_docker, None, False
+    dockerapi.dev_containers(), dockerapi.dev_containers()
+    assert len(listed) == 2, listed
+    seen_live = []
+
+    def on_change():
+        n = len(listed)
+        dockerapi.dev_containers(), dockerapi.dev_containers()
+        seen_live.append((dockerapi.LIVE, len(listed) - n))
+    dockerapi.watch_once(on_change)
+    assert seen_live == [(True, 0)] * 3 and len(listed) == 5 and not dockerapi.LIVE, (seen_live, listed)
+    dockerapi.dev_containers()
+    assert len(listed) == 6 and dockerapi.NAMES["c1"] == "dockbench-a"
+    path, timeout, is_stream = opened[0]
+    assert urllib.parse.quote(json.dumps(dockerapi.EVENTS)) in path and "exec_create" not in urllib.parse.unquote(path) and '"die"' in urllib.parse.unquote(path) and (timeout, is_stream) == (600, True), opened
+    try:
+        dockerapi.watch_once(on_change)
+        raise AssertionError("a failed stream was swallowed")
+    except TimeoutError:
+        assert not dockerapi.LIVE and seen_live[-1] == (True, 0), seen_live
+    dockerapi.docker, dockerapi.CACHE = real_docker, None
+    dockerapi.NAMES.clear()
 
     # uploads: a multipart body the stdlib email parser reads back, text and JSON fields plus the file
     body, ctype = telegram.multipart({"chat_id": -100, "media": [{"type": "photo"}], "caption": "hi"}, {"photo": ("1.png", b"\x89PNG\r\n--x")})
