@@ -12,7 +12,7 @@ import urllib.error
 import urllib.request
 
 from . import claude, commands, dockerapi, markdown, onboarding, pins, push, routing, runs, state, status, telegram, topics, usage
-from .config import BOT_MENU, DEFAULT_PROMPT, EFFORTS, IDLE_LIMIT, INBOX, MAX_SESSIONS, MODELS, PERMS, RUN_MARK, RUN_TIMEOUT, WORKSPACE
+from .config import BOT_MENU, DEFAULT_PROMPT, EFFORTS, IDLE_LIMIT, INBOX, MAX_SESSIONS, MODELS, PERMS, RUN_TIMEOUT, WORKSPACE
 
 
 def self_check():
@@ -140,11 +140,11 @@ def self_check():
     assert cmd[cmd.index("--model") + 1] == "opus" and cmd[cmd.index("--effort") + 1] == "high" and cmd[cmd.index("--permission-mode") + 1] == "auto", cmd  # a session from before the mode step
     assert [cmd[i + 1] for i, a in enumerate(cmd) if a == "--add-dir"] == [INBOX, "/o/7"] and "/o/7:" in cmd[cmd.index("--append-system-prompt") + 1], cmd
     plan = claude.claude_cmd(dict(pick, perm="plan"), "p", "abc", False, "/o/7")
-    assert plan[plan.index("--permission-mode") + 1] == "plan" and re.match(RUN_MARK, " ".join(plan)), plan
+    assert plan[plan.index("--permission-mode") + 1] == "plan", plan
     assert claude.claude_cmd(pick, "p", "abc", False, "/o/7")[-4:-2] == ["--session-id", "abc"]
-    line = " ".join(cmd)  # what pkill -f matches against
-    assert re.match(f"{RUN_MARK}.* abc -- ", line) and re.match(f"{RUN_MARK}.* abc -- ", f"timeout -k 30 {RUN_TIMEOUT} claude -p --resume abc -- x")  # a run started before nice was added
-    assert not re.match(RUN_MARK, " ".join(usage.USAGE)) and not re.match(RUN_MARK, " ".join(commands.PROBE)) and not re.match(RUN_MARK, "claude --output-format stream-json --verbose --input-format stream-json --resume=abc")
+    # the shape the agent's probes::is_run() finds a run by: starts with timeout -k, claude -p next to each other, the session id and -- right before the prompt; the usage pass and the commands probe never match
+    assert cmd[:2] == ["timeout", "-k"] and ["claude", "-p"] in [cmd[i:i + 2] for i in range(len(cmd))] and cmd[-3:] == ["abc", "--", "-x"], cmd
+    assert usage.USAGE[:2] != ["timeout", "-k"] and commands.PROBE[:2] != ["timeout", "-k"]
 
     # the picker: every button fits Telegram's 64-byte callback_data, the model step offers the last pick, the effort step every level, the mode step every mode
     text, kb = telegram.picker("a", None, None, ("opus", "high", "plan"))
@@ -224,6 +224,7 @@ def self_check():
     # a message asks model, effort and mode, the last tap starts a session; back from the mode goes to the effort; a reply to it continues that session; a stranger's tap is dropped
     calls, jobs, mids, done = [], [], iter(range(1000, 2000)), threading.Semaphore(0)
     telegram.tg = lambda method, **p: calls.append((method, p)) or ({"message_id": next(mids)} if method == "sendMessage" else True)
+    real_run = runs.run
     runs.run = lambda r, uid, msgs, status: (jobs.append((r.key, uid, [m["message_id"] for m in msgs], status)), done.release())
     state.STATE["sessions"], state.STATE["replies"] = {}, {}
     state.PENDING.clear()
@@ -637,11 +638,11 @@ def self_check():
     assert len(telegram.send_images(7, [("1.png", b"p"), ("2.png", b"wide")])) == 2 and [c[0] for c in calls] == ["sendMediaGroup", "sendDocument", "sendDocument"] and calls[-1][2]["reply_parameters"] is None, calls
 
     # the outbox after a run: images only, sorted, renamed, linked to the session, then the folder removed; a failure becomes a note
-    calls, removed = [], []
+    calls, removed, real_agent = [], [], dockerapi.agent
     dockerapi.get_files = lambda cid, path, limit: [("b.PNG", b"2"), ("notes.txt", b"t"), ("a.jpg", b"1")]
-    dockerapi.exec_run = lambda cid, cmd, timeout=60, env=None: removed.append(cmd) or (0, b"")
+    dockerapi.agent = lambda cid, args, timeout=60: removed.append(args) or (0, b"ok\n")
     runs.send_outbox(70, 7, "cid", "/o/70", 71)
-    assert [c[0] for c in calls] == ["sendMediaGroup"] and calls[0][1] == ["p0", "p1"] and removed == [["rm", "-rf", "/o/70"]], (calls, removed)
+    assert [c[0] for c in calls] == ["sendMediaGroup"] and calls[0][1] == ["p0", "p1"] and removed == [["outbox-clear", "70"]], (calls, removed)
     assert calls[0][2]["media"][0]["caption"] == "🟥 #70 · #1" and "caption" not in calls[0][2]["media"][1], calls[0]
     assert [m for m, k in state.STATE["replies"].items() if k == 70] == ["615", "616"] and calls[0][2]["reply_parameters"]["message_id"] == 71, state.STATE["replies"]
     calls = []
@@ -654,11 +655,12 @@ def self_check():
         raise dockerapi.DockerError("GET /containers/cid/archive: 500 boom")
     dockerapi.get_files = broken
     runs.send_outbox(70, 7, "cid", "/o/70", 71)
-    assert [c[0] for c in calls] == ["sendMessage"] and "could not send Claude's images" in calls[0][2]["text"] and removed[-1] == ["rm", "-rf", "/o/70"], calls
+    assert [c[0] for c in calls] == ["sendMessage"] and "could not send Claude's images" in calls[0][2]["text"] and removed[-1] == ["outbox-clear", "70"], calls
     calls = []
     dockerapi.get_files = lambda cid, path, limit: []
     runs.send_outbox(70, 7, "cid", "/o/70", 71)
     assert calls == [], calls
+    dockerapi.agent = real_agent
 
     # the watchdog: a session write, or BUSY_CPU since the previous probe, is work; IDLE_LIMIT without either is a hung run
     r = runs.Run(1, 7)
@@ -672,48 +674,46 @@ def self_check():
         assert claude.activity("c", "s") == want, (out, want)
     dockerapi.agent = real_agent
 
+    def no_exec_at_all(cid, cmd, timeout=60, env=None):
+        raise AssertionError(f"ran an exec: {cmd}")
+
     # /usage in General: one block per account, read once from its first container; signed-out, failed and stopped containers listed after
     out = "You are currently using your subscription to power your Claude Code usage\n\nCurrent session: 2% used · resets Nov 2, 9:20pm (UTC)\nCurrent week (all models): 53% used · resets Nov 3, 1am (UTC)\n\nWhat's contributing to your limits usage?\nLast 24h · 5 requests\n  82%  Turn off skills\n"
     assert usage.limits(out) == ["Current session: 2% used · resets Nov 2, 9:20pm (UTC)", "Current week (all models): 53% used · resets Nov 3, 1am (UTC)"]
     dockerapi.dev_containers = lambda: [{"Id": i, "Names": [f"/dockbench-{i}"], "State": s} for i, s in [("b", "running"), ("a", "running"), ("c", "running"), ("d", "exited"), ("e", "running"), ("f", "running")]] + [{"Id": "x", "Names": ["/other"], "State": "running"}]
-    auth = {"a": (0, b'{"loggedIn": true, "email": "me@x", "subscriptionType": "max"}'), "b": (0, b'warn\n{"loggedIn": true, "email": "me@x", "subscriptionType": "max"}'), "c": (1, b'{"loggedIn": false}'), "f": (0, b'{"loggedIn": true, "email": "two@x"}')}
-    execs = []
+    accounts = {"a": {"loggedIn": True, "email": "me@x", "plan": "max"}, "b": {"loggedIn": True, "email": "me@x", "plan": "max"}, "c": {"loggedIn": False, "email": None, "plan": None}, "f": {"loggedIn": True, "email": "two@x", "plan": None}}
+    execs, real_agent = [], dockerapi.agent
 
     def fake(cid, cmd, timeout=60, env=None):
-        execs.append((cid, cmd[3]))
-        if cmd == usage.USAGE:
-            return (0, out.encode()) if cid == "a" else (1, b"Error: rate limited\n")
-        if cid == "e":
-            raise dockerapi.DockerError("boom")
-        return auth[cid]
+        assert cmd == usage.USAGE, f"the usage pass ran an exec other than /usage: {cmd}"
+        execs.append(cid)
+        return (0, out.encode()) if cid == "a" else (1, b"Error: rate limited\n")
     dockerapi.exec_run = fake
-    dockerapi.agent = lambda cid, args, timeout=60: None  # the agent gives no fingerprint: account() on every pass
+    dockerapi.agent = lambda cid, args, timeout=60: (0, json.dumps(accounts[cid]).encode()) if args == ["account"] and cid in accounts else None  # e: no answer
     report = usage.report()
     assert report == "👤 me@x (max) · a, b\nCurrent session: 2% used · resets Nov 2, 9:20pm (UTC)\nCurrent week (all models): 53% used · resets Nov 3, 1am (UTC)\n\n👤 two@x · f\nusage unavailable: Error: rate limited\n\nnot signed in: c\nerror: e\nnot running: d", report
-    assert sorted(c for c, k in execs if k == usage.USAGE[3]) == ["a", "f"], execs
-    assert not usage.ACCOUNTS, usage.ACCOUNTS
-
-    # with the agent's fingerprint, `claude auth status` reruns only when it changes; a stopped container's entry goes
-    keys, execs = {"a": b"10:1:me@x\n", "b": b"10:2:me@x\n", "c": b"signed-out:\n", "e": b"x\n", "f": b"9:9:two@x\n"}, []
-    dockerapi.agent = lambda cid, args, timeout=60: (0, keys[cid]) if args == ["claude-key"] else None
-    assert usage.report() == report and sorted(c for c, k in execs if k == "auth") == ["a", "b", "c", "e", "f"], execs  # e fails, so it is never cached
-    execs.clear()
-    keys["b"] = b"11:3:me@x\n"
-    assert usage.report() == report and sorted(c for c, k in execs if k == "auth") == ["b", "e"], execs
-    dockerapi.dev_containers = lambda: [{"Id": "a", "Names": ["/dockbench-a"], "State": "running"}]
-    usage.report()
-    assert set(usage.ACCOUNTS) == {"a"}, usage.ACCOUNTS
-    usage.ACCOUNTS.clear()
+    assert sorted(execs) == ["a", "f"], execs
+    assert usage.account("f") == ("two@x", None) and usage.account("c") is None
+    accounts["g"] = {"loggedIn": True, "email": None, "plan": None}
+    assert usage.account("g") == ("unknown account", None)
+    try:
+        usage.account("e")
+        raise AssertionError("no answer must raise")
+    except RuntimeError:
+        pass
+    # /status: the sign-in from the agent, no exec
+    dockerapi.exec_run, dockerapi.container = no_exec_at_all, (lambda name: {"Id": name, "State": "running"})
+    assert "dockbench-a: running, claude logged in" in routing.status_text(7, {"name": "a"}) and "claude NOT logged in" in routing.status_text(7, {"name": "c"}) and "sign-in unknown" in routing.status_text(7, {"name": "e"})
     dockerapi.agent = real_agent
 
     # the probes go only over HTTP to dockbench-agent, never an exec: the token is read once through the archive API and again after a 401; a 404 (an agent from before the routes), a missing token file or no answer gives None, and the next call asks again
     def no_exec(cid, cmd, timeout=60, env=None):
         raise AssertionError(f"probe ran an exec: {cmd}")
     dockerapi.exec_run = no_exec
-    real_files, real_http = dockerapi.get_files, dockerapi.http_get
+    real_files, real_http = dockerapi.get_files, dockerapi.http
     dockerapi.NAMES["new"] = "dockbench-new"
     pin = {"git": {"branch": "main", "oid": "abc", "untracked": 1, "upstream": True, "gone": False, "ahead": 2, "add": 3, "del": 1, "files": 2, "repo": "shop"}, "subs": [{"branch": "feat", "oid": "def", "untracked": 0, "upstream": False, "gone": True, "ahead": 0, "dir": "A"}]}
-    tok, reads, http, answers = {"new": b"tok1\n"}, [], [], {"pin-info": (200, json.dumps(pin).encode()), "activity": (204, b""), "title": (200, b"Fix login"), "claude-key": (200, b"1:2:me@x\n")}
+    tok, reads, http, answers = {"new": b"tok1\n"}, [], [], {"pin-info": (200, json.dumps(pin).encode()), "activity": (204, b""), "title": (200, b"Fix login"), "claude-key": (200, b"1:2:me@x\n"), "prepare": (200, b"ok\n")}
 
     def fake_files(cid, path, limit):
         reads.append(cid)
@@ -722,21 +722,24 @@ def self_check():
             raise dockerapi.DockerError("GET /containers/new/archive: 404 no such file")
         return [("", tok[cid])]
 
-    def fake_http(url, headers, timeout):
+    def fake_http(method, url, headers, timeout):
         route = url.split("/", 3)[3].split("?")[0]
+        assert method == dockerapi.ROUTES[route][0], (method, route)
         http.append((url, headers["Authorization"]))
         if headers["Authorization"] != f"Bearer {tok['new'].strip().decode()}":
             raise urllib.error.HTTPError(url, 401, "Unauthorized", {}, None)
         if isinstance(answers[route], Exception):
             raise answers[route]
         return answers[route]
-    dockerapi.get_files, dockerapi.http_get = fake_files, fake_http
+    dockerapi.get_files, dockerapi.http = fake_files, fake_http
     assert claude.activity("new", "s") is None and claude.title("new", "s") == "Fix login" and dockerapi.agent("new", ["claude-key"]) == (0, b"1:2:me@x\n")
     g, subs = pins.pin_facts("new")
     assert (g["repo"], g["ahead"], subs[0]["dir"], subs[0]["gone"]) == ("shop", 2, "A", True) and reads == ["new"], (g, subs, reads)
     assert [u.split("8080")[1] for u, _ in http] == ["/activity?session=s", "/title?session=s", "/claude-key", "/pin-info?dir=%2Fhome%2Fdev%2Fworkspace"], http
     tok["new"] = b"tok2\n"  # the agent restarted: one 401, the token is read again, the probe answers
     assert claude.title("new", "s") == "Fix login" and reads == ["new", "new"] and [a for _, a in http[-2:]] == ["Bearer tok1", "Bearer tok2"], (reads, http)
+    tok["new"] = b"tok3\n"  # the same for a POST route: one 401, the token read again, the same call answers
+    assert dockerapi.agent("new", ["prepare", "70"]) == (0, b"ok\n") and reads[-1] == "new" and len(reads) == 3 and http[-1][0].endswith("8080/prepare?session=70") and [a for _, a in http[-2:]] == ["Bearer tok2", "Bearer tok3"], (reads, http)
     for answer in (urllib.error.HTTPError("u", 404, "Not Found", {}, None), OSError("connection refused")):  # an agent without the routes, or nothing answers: nothing this time, HTTP again next time
         answers["title"] = answer
         n = len(http)
@@ -751,7 +754,54 @@ def self_check():
     del tok["new"]  # no token file: an image from before the routes
     dockerapi.TOKENS.clear()
     assert claude.title("new", "s") == "" and dockerapi.agent("new", ["claude-key"]) is None and reads[-2:] == ["new", "new"], reads
-    dockerapi.get_files, dockerapi.http_get = real_files, real_http
+    dockerapi.get_files = real_files
+
+    # a run through the agent: prepare before claude, outbox-clear after the answer; Stop, the watchdog and a bot restart stop runs through it too; an agent without the routes stops a prompt with a note and starts no claude
+    order, agent_http = [], {}
+
+    def agent_fake(method, url, headers, timeout):
+        route = url.split("/", 3)[3]
+        order.append(f"{method} {route}")
+        code = agent_http.get(route.split("?")[0], 200)
+        if isinstance(code, Exception):
+            raise code
+        if code != 200:
+            raise urllib.error.HTTPError(url, code, "x", {}, None)
+        return 200, b"ok\n" if route.startswith(("prepare", "outbox")) else b"0\n" if route.startswith("stop") else b""
+    dockerapi.http, dockerapi.exec_run = agent_fake, no_exec_at_all
+    dockerapi.NAMES.update(cid="dockbench-a", c2="dockbench-b")
+    dockerapi.TOKENS.update(cid="t", c2="t")
+    real_claude, real_files2 = claude.run_claude, dockerapi.get_files
+    claude.run_claude = lambda cid, cfg, prompt, sid, resume, out, on_session, on_text=None: order.append("claude") or ({"result": "done"}, 0, "", None)
+    dockerapi.get_files = lambda cid, path, limit: []
+    dockerapi.container = lambda name: {"Id": "cid", "State": "running"}
+    telegram.tg = lambda method, **p: {"message_id": 990}
+    state.STATE["sessions"]["700"] = {"tid": 7, "name": "a", "sid": "1b4e28ba-2fa1-11d2-883f-0016d3cca427", "model": "opus", "effort": "high"}
+    msg = [{"message_id": 700, "text": "hi"}]
+    real_run(runs.Run(700, 7), 1, msg, None)
+    assert [o for o in order if not o.startswith("GET title")] == ["POST prepare?session=700", "claude", "POST outbox-clear?session=700"], order
+    order.clear()
+    agent_http["prepare"] = 404  # an image from before the routes
+    try:
+        real_run(runs.Run(700, 7), 1, msg, None)
+        raise AssertionError("a run without prepare went on")
+    except RuntimeError as e:
+        assert "update its image" in str(e) and "claude" not in order, (e, order)
+    r = runs.Run(700, 7)
+    r.busy, r.sid, r.cid = True, "sid-1", "cid"
+    state.ACTIVE[700] = r
+    order.clear()
+    assert runs.stop(700) == "stopping" and order == ["POST stop?session=sid-1"], order
+    r.stopped = False
+    agent_http["stop"] = OSError("refused")
+    assert runs.stop(700) == "could not reach dockbench-agent in the container to stop the run"
+    state.ACTIVE.clear()
+    order.clear()
+    dockerapi.dev_containers = lambda: [{"Id": "cid", "State": "running"}, {"Id": "c2", "State": "running"}, {"Id": "c3", "State": "exited"}]
+    state.STATE["sessions"].pop("700")
+    runs.recover()
+    assert order == ["POST stop-all", "POST stop-all"], order
+    claude.run_claude, dockerapi.get_files, dockerapi.http = real_claude, real_files2, real_http
     dockerapi.NAMES.clear(), dockerapi.TOKENS.clear()
 
     # the usage message in General: sent and pinned once, then edited only when its text changed, sent again when deleted

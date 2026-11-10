@@ -99,17 +99,18 @@ def exec_run(cid, cmd, timeout=60, env=EXEC_ENV):
     return exec_exit(eid), out
 
 
-# The image's dockbench-agent serves the probes on its port, behind a token it writes at start (the agent's TOKEN_FILE): a GET on devnet starts nothing in the container. The bot reads the token once per container through the archive API (no exec) and again after a 401 (the agent restarted with a new one). Images from before the probe routes (2026-11-09) are not supported: their probes answer nothing.
+# The image's dockbench-agent serves the probes and the run chores (a run's folders, stopping runs) on its port, behind a token it writes at start (the agent's TOKEN_FILE): a request on devnet starts nothing in the container. The bot reads the token once per container through the archive API (no exec) and again after a 401 (the agent restarted with a new one). Images from before these routes (2026-11-10) are not supported: their agent answers nothing to them.
 AGENT_PORT = 8080
 AGENT_TOKEN = "/home/dev/.dockbench-agent-token"
-ROUTES = {"pin-info": "/pin-info?dir={}", "activity": "/activity?session={}", "title": "/title?session={}", "claude-key": "/claude-key"}
+ROUTES = {"pin-info": ("GET", "/pin-info?dir={}"), "activity": ("GET", "/activity?session={}"), "title": ("GET", "/title?session={}"), "claude-key": ("GET", "/claude-key"), "account": ("GET", "/account"),
+          "prepare": ("POST", "/prepare?session={}"), "outbox-clear": ("POST", "/outbox-clear?session={}"), "stop": ("POST", "/stop?session={}"), "stop-all": ("POST", "/stop-all")}
 NAMES = {}  # container id -> name, from the last dev_containers() listing; the name resolves on devnet
 TOKENS = {}  # container id -> its agent's token
 
 
-def http_get(url, headers, timeout):
-    """(status, body) of a GET; raises urllib.error.HTTPError on 4xx/5xx and OSError (URLError included) when nothing answers."""
-    with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=timeout) as r:
+def http(method, url, headers, timeout):
+    """(status, body) of a request without a body; raises urllib.error.HTTPError on 4xx/5xx and OSError (URLError included) when nothing answers."""
+    with urllib.request.urlopen(urllib.request.Request(url, data=b"" if method == "POST" else None, headers=headers, method=method), timeout=timeout) as r:
         return r.status, r.read()
 
 
@@ -124,24 +125,25 @@ def token(cid):
 
 
 def agent(cid, args, timeout=60):
-    """(exit code, output) of the dockbench-agent probe `args` over HTTP, shaped like its subcommand's (204, the run is not there, is exit 3). None when it gives nothing this time: no name or token known for the container (an image from before the routes has no token file), an error status, or no answer; the next call asks again."""
+    """(exit code, output) of the dockbench-agent route `args` (a ROUTES name, then its arguments) over HTTP, shaped like a subcommand's (204, the run is not there, is exit 3). None when it gives nothing this time: no name or token known for the container (an image from before the routes has no token file), an error status, or no answer; the next call asks again."""
     name = NAMES.get(cid)
     if not name:
         return None
-    path = ROUTES[args[0]].format(*(urllib.parse.quote(a, safe="") for a in args[1:]))
+    method, path = ROUTES[args[0]]
+    path = path.format(*(urllib.parse.quote(a, safe="") for a in args[1:]))
     for retry in (True, False):
         tok = TOKENS.get(cid) or token(cid)
         if not tok:
             return None
         TOKENS[cid] = tok
         try:
-            status, body = http_get(f"http://{name}:{AGENT_PORT}{path}", {"Authorization": f"Bearer {tok}"}, timeout)
+            status, body = http(method, f"http://{name}:{AGENT_PORT}{path}", {"Authorization": f"Bearer {tok}"}, timeout)
             return (3 if status == 204 else 0), body
         except urllib.error.HTTPError as e:
             if e.code == 401 and retry:
                 TOKENS.pop(cid, None)
                 continue
-            if e.code != 404:  # 404: an agent from before the routes, which pins reports
+            if e.code != 404:  # 404: an agent from before the routes, which its caller reports
                 log.warning("%s: agent %s answered %s", name, path.split("?")[0], e.code)
             return None
         except OSError:  # refused, name not resolved, timeout

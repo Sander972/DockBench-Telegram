@@ -3,7 +3,7 @@ import re
 import threading
 import time
 
-from . import commands, dockerapi, onboarding, push, runs, state, telegram
+from . import commands, dockerapi, onboarding, push, runs, state, telegram, usage
 from .config import COMMANDS, DEFAULT_PERM, EFFORTS, HELP, MODELS, NAME_RE, PERMS, WORKSPACE, log
 
 
@@ -73,7 +73,10 @@ def status_text(tid, cfg):
             c = dockerapi.container(cfg["name"])
             health = c["State"] if c else "not found"
             if health == "running":
-                health += ", claude " + ("logged in" if dockerapi.exec_run(c["Id"], ["claude", "auth", "status"])[0] == 0 else "NOT logged in: run claude once in VS Code")
+                try:
+                    health += ", claude " + ("logged in" if usage.account(c["Id"]) else "NOT logged in: run claude once in VS Code")
+                except (RuntimeError, ValueError):
+                    health += ", claude sign-in unknown (dockbench-agent gave no answer: update its image)"
         except Exception as e:
             health = f"docker error: {e}"
         lines += [f"dockbench-{cfg['name']}: {health}", f"VS Code: https://vscode.dev/tunnel/{cfg['name']}{WORKSPACE}"]

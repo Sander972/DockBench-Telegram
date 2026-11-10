@@ -5,7 +5,7 @@ import re
 from . import dockerapi, state, telegram
 from .config import BOT_MENU, HIDDEN_COMMANDS, HIDDEN_PREFIXES, log
 
-# A local command: Claude emits its init event and answers without a model call, so the probe costs nothing (checked with Claude Code 2.1.300). Not persisted, and RUN_MARK does not match it, so recover() and /stop leave it alone.
+# A local command: Claude emits its init event and answers without a model call, so the probe costs nothing (checked with Claude Code 2.1.300). Not persisted, and it does not start with `timeout -k` like a run, so the agent's stop routes leave it alone.
 PROBE = ["timeout", "60", "claude", "-p", "--no-session-persistence", "--permission-mode", "plan", "--permission-prompts", "none", "--output-format", "stream-json", "--verbose", "--", "/release-notes"]
 SYNCED = None  # (group, menu) last sent with setMyCommands, so an unchanged menu is not sent again
 PROBED = set()  # PROJECT names probed since start: a probe that finds nothing is not retried every minute

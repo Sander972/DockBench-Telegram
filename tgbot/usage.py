@@ -11,36 +11,20 @@ EVERY = 10 * 60  # seconds between passes when no run ends
 MIN_GAP = 120  # seconds at least between two passes, also after a WAKE: each pass starts a Claude Code (`claude -p /usage`) per account, a few hundred MB and seconds of CPU
 WAKE = threading.Event()  # set when a run starts or ends: a prompt sent to an account, or its answer back, shows in its limits without waiting for the next pass
 SHOWN = None  # (message id, text) last shown, so an unchanged message is not edited
-ACCOUNTS = {}  # container id -> (dockbench-agent claude-key, account()): `claude auth status` is a whole Claude Code start, so it reruns only when the container's sign-in files changed
 
-# Both are local commands: Claude answers without a model call, so they cost nothing (checked with Claude Code 2.1.306). The container's own Claude reads the limits with its own credentials, so the bot never handles a token. Not persisted, and RUN_MARK does not match them, so recover() and /stop leave them alone.
-AUTH = ["timeout", "30", "claude", "auth", "status"]
+# A local command: Claude answers without a model call, so it costs nothing (checked with Claude Code 2.1.306). The container's own Claude reads the limits with its own credentials, so the bot never handles a token. Not persisted, and it does not start with `timeout -k` like a run, so the agent's stop routes leave it alone.
 USAGE = ["timeout", "60", "nice", "-n", NICE, "claude", "-p", "--no-session-persistence", "--", "/usage"]
 
 
 def account(cid):
-    """(email, plan) Claude Code is signed in with in the container, None when signed out. The output is JSON, maybe after a warning on stderr."""
-    code, out = dockerapi.exec_run(cid, AUTH)
-    text = out.decode(errors="replace")
-    try:
-        info = json.loads(text[text.find("{"):text.rfind("}") + 1])
-    except ValueError:
+    """(email, plan) Claude Code is signed in with in the container, None when signed out, from the agent's /account route: it reads the sign-in files, no Claude Code starts. Raises when the agent gives no answer (an image from before the route)."""
+    r = dockerapi.agent(cid, ["account"])
+    if r is None:
+        raise RuntimeError("dockbench-agent gave no answer")
+    info = json.loads(r[1])
+    if not info.get("loggedIn"):
         return None
-    if code != 0 or not info.get("loggedIn"):
-        return None
-    return info.get("email") or info.get("authMethod") or "unknown account", info.get("subscriptionType")
-
-
-def account_cached(cid):
-    """account(), reused while the container's sign-in fingerprint (`dockbench-agent claude-key`: the credentials file's size and time, the account email) is unchanged. When the agent gives no fingerprint, `claude auth status` runs on every pass."""
-    r = dockerapi.agent(cid, ["claude-key"])
-    key = r[1] if r and r[0] == 0 else None
-    if key is not None and ACCOUNTS.get(cid, (None,))[0] == key:
-        return ACCOUNTS[cid][1]
-    a = account(cid)
-    if key is not None:
-        ACCOUNTS[cid] = (key, a)
-    return a
+    return info.get("email") or "unknown account", info.get("plan")
 
 
 def limits(text):
@@ -55,14 +39,12 @@ def report():
     except Exception as e:
         return f"docker error: {e}"
     running = sorted((c for c in dev if c.get("State") == "running"), key=dockerapi.project)
-    for cid in set(ACCOUNTS) - {c["Id"] for c in running}:  # stopped or recreated: a later start is asked again
-        ACCOUNTS.pop(cid, None)
 
     def who(c):
         try:
-            return account_cached(c["Id"])
+            return account(c["Id"])
         except Exception as e:
-            log.warning("dockbench-%s: claude auth status failed: %s", dockerapi.project(c), e)
+            log.warning("dockbench-%s: account: %s", dockerapi.project(c), e)
             return "error"
 
     with ThreadPoolExecutor(8) as pool:

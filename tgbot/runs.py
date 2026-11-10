@@ -8,9 +8,9 @@ import urllib.parse
 import uuid
 
 from . import claude, commands, dockerapi, pins, state, telegram, usage
-from .config import BUSY_CPU, DEFAULT_PERM, IDLE_LIMIT, IMAGE_EXTS, INBOX, MAX_IMAGES, OUTBOX, OUTBOX_MAX, RUN_MARK, RUN_TIMEOUT, log
+from .config import BUSY_CPU, DEFAULT_PERM, IDLE_LIMIT, IMAGE_EXTS, INBOX, MAX_IMAGES, OUTBOX, OUTBOX_MAX, RUN_TIMEOUT, log
 
-# a session id the container's claude reports is kept only as a UUID: it goes into --resume and a pkill pattern later, and the container is not trusted
+# a session id the container's claude reports is kept only as a UUID: it goes into --resume and the agent's stop route later, and the container is not trusted
 SID_RE = re.compile(r"[0-9a-f-]{36}")
 
 
@@ -137,12 +137,10 @@ def stop(key):
     if not r.busy:
         return f"nothing running{note}"
     r.stopped = True
-    if (sid := r.sid) and r.cid:
-        try:
-            # Only this run's timeout wrapper: the VS Code panel may have the same session open (as --resume=<sid>). timeout passes the signal to its whole process group.
-            dockerapi.exec_run(r.cid, ["pkill", "-f", f"{RUN_MARK}.* {sid} -- "])
-        except dockerapi.DockerError as e:
-            log.warning("session %s: stop: %s", key, e)  # the container is gone or stopped, and the run with it
+    # the agent signals only this run's timeout wrapper, never the VS Code panel's claude of the same session (--resume=<sid>); timeout passes it on to its whole process group
+    if (sid := r.sid) and r.cid and dockerapi.agent(r.cid, ["stop", sid]) is None:
+        log.warning("session %s: stop: dockbench-agent gave no answer", key)
+        return f"could not reach dockbench-agent in the container to stop the run{note}"
     return f"stopping{note}"
 
 
@@ -174,8 +172,9 @@ def run(r, update_id, msgs, status):
         for n, (file_id, is_image) in enumerate(telegram.attachments(msgs)):
             ext, data = telegram.download(file_id)
             files.append((f"{update_id}-{n}{ext}", data, is_image))
-        # old attachments go, or the home volume grows with every photo; the outbox starts empty, so it holds only this run's images
-        dockerapi.exec_run(c["Id"], ["sh", "-c", 'rm -rf "$2" && mkdir -p "$1" "$2" && find "$1" -type f -mtime +14 -delete', "sh", INBOX, out])
+        # the agent drops old attachments, or the home volume grows with every photo, and empties the outbox, so it holds only this run's images
+        if dockerapi.agent(c["Id"], ["prepare", str(key)]) is None:
+            raise RuntimeError(f"dockbench-agent in dockbench-{name} gave no answer, prompt not run: update its image (DockBench from 2026-11-10 or later)")
         if files:
             dockerapi.docker("PUT", f"/containers/{c['Id']}/archive?path={urllib.parse.quote(INBOX)}", dockerapi.tarball([(f, d) for f, d, _ in files]))
     except Exception:
@@ -243,10 +242,8 @@ def send_outbox(key, tid, cid, out, req):
     except Exception as e:
         log.warning("session %s: outbox: %s", key, e)
         state.link(key, telegram.send(tid, f"⚠️ could not send Claude's images: {e}", reply=req, tag=lambda: label(key)))
-    try:
-        dockerapi.exec_run(cid, ["rm", "-rf", out])
-    except dockerapi.DockerError as e:
-        log.warning("session %s: could not empty the outbox: %s", key, e)
+    if dockerapi.agent(cid, ["outbox-clear", str(key)]) is None:
+        log.warning("session %s: could not empty the outbox: dockbench-agent gave no answer", key)
 
 
 def ticker():
@@ -325,10 +322,8 @@ def watchdog():
                 continue
             r.idle = True
             log.info("session %s: no activity for %d min, killing the run", r.key, IDLE_LIMIT // 60)
-            try:
-                dockerapi.exec_run(cid, ["pkill", "-f", f"{RUN_MARK}.* {sid} -- "])
-            except dockerapi.DockerError as e:
-                log.warning("session %s: watchdog kill: %s", r.key, e)
+            if dockerapi.agent(cid, ["stop", sid]) is None:
+                log.warning("session %s: watchdog kill: dockbench-agent gave no answer", r.key)
 
 
 def clean(tid, key=None):
@@ -403,19 +398,18 @@ def purge(tid):
 
 
 def recover():
-    """A fresh process owns no runs, but a docker exec outlives the client that started it: kill what a previous instance left running, and tell its requests."""
+    """A fresh process owns no runs, but a docker exec outlives the client that started it: stop what a previous instance left running (each running container's agent, /stop-all), and tell its requests."""
+    running = None
     for _ in range(12):  # a socket proxy restarted with the bot may need a moment
         try:
-            for c in dockerapi.dev_containers():
-                if c["State"] == "running":
-                    dockerapi.exec_run(c["Id"], ["pkill", "-f", RUN_MARK])
-            stopped = True
+            running = [c for c in dockerapi.dev_containers() if c["State"] == "running"]
             break
         except Exception as e:
-            stopped = False
-            log.warning("could not stop leftover runs: %s", e)
+            log.warning("could not list the dev containers to stop leftover runs: %s", e)
             time.sleep(5)
-    note = ("The bot restarted during this run, so the run was stopped. Reply to continue the session." if stopped else f"The bot restarted during this run and could not reach Docker to stop it, so it may keep going for up to {RUN_TIMEOUT // 60} min. Wait for it before replying.") + " Prompts queued behind it, if any, were dropped too."
+    answers = [dockerapi.agent(c["Id"], ["stop-all"]) for c in running or []]  # every container is asked, even after one gave no answer
+    stopped = running is not None and None not in answers
+    note = ("The bot restarted during this run, so the run was stopped. Reply to continue the session." if stopped else f"The bot restarted during this run and could not reach Docker or the container's dockbench-agent to stop it, so it may keep going for up to {RUN_TIMEOUT // 60} min. Wait for it before replying.") + " Prompts queued behind it, if any, were dropped too."
     with state.LOCK:
         left = [(k, s["tid"], s["working"], s.get("req")) for k, s in state.STATE["sessions"].items() if s.get("working")]
         left += [(None, int(k), t["working"], None) for k, t in state.STATE["threads"].items() if t.get("working")]  # a run of the topic-session bot this one replaced

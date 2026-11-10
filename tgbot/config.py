@@ -16,9 +16,7 @@ RUN_TIMEOUT = 4 * 3600  # hard limit, for a run that keeps busy without end; a h
 # A run that neither wrote to its session nor used BUSY_CPU of a core for this long is hung and killed (runs.watchdog). An idle claude waiting on a tool uses ~1% (measured 2026-11-01).
 IDLE_LIMIT = 15 * 60
 BUSY_CPU = 0.05
-# Only the bot's own runs start like this (see claude.claude_cmd), never an interactive or VS Code claude, so pkill on it is safe.
 NICE = "10"  # niceness of the runs and of the usage pass: the Claude Code starts the bot asks for give way to interactive work
-RUN_MARK = "^timeout -k 30 [0-9]+ (nice -n [0-9]+ )?claude -p "  # the nice part is optional so a restarted bot still finds the runs an older version started
 COMMANDS = ("bind", "clean", "clear", "help", "purge", "push", "status", "stop")
 NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 MODELS = ("fable", "opus", "sonnet", "haiku")
