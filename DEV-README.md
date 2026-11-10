@@ -21,6 +21,8 @@ The technical side of the bot: how it is built, how it behaves in the edge cases
 
 A follow-up is a reply to the session's first message, to any of its answers or to its status message. It runs with the model, effort and mode picked when the session started. Follow-ups of one session run one after the other (`queued in this session, N ahead`).
 
+The bot sends every message in a topic silently (`disable_notification`): it shows up in the notification list without sound or vibration, so a long run does not buzz the phone at each status split, answer and image.
+
 Every message of a session starts with the title Claude Code gave it (usually within its first minute) and the message's number: `Fix login bug · #3`. Until there is a title, a badge stands in: a colored shape and the session's id, like `🟢 #4518 · #1`. Telegram has no colored text, so the color is the emoji, and sessions started close together always differ in shape and color.
 
 ### Images

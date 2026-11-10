@@ -283,7 +283,7 @@ def self_check():
     tap = lambda data, mid, uid=state.OWNER_ID: routing.handle({"update_id": 9, "callback_query": {"id": "q", "data": data, "from": {"id": uid}, "message": {"message_id": mid, "chat": {"id": state.GROUP_ID}}}}, {})
     routing.handle({"update_id": 2, "message": topic_msg(100, "fix it")}, {})
     pid = next(iter(state.PENDING))
-    assert calls[-1][0] == "sendMessage" and calls[-1][1]["reply_parameters"]["message_id"] == 100 and "Model?" in calls[-1][1]["text"], calls[-1]
+    assert calls[-1][0] == "sendMessage" and calls[-1][1]["reply_parameters"]["message_id"] == 100 and "Model?" in calls[-1][1]["text"] and calls[-1][1]["disable_notification"], calls[-1]
     calls.clear()
     tap("m:opus", pid, uid=6)
     assert calls == [] and state.PENDING[pid]["model"] is None, "a stranger's tap was handled or answered"
@@ -684,7 +684,7 @@ def self_check():
     pngs = [(f"{i}.png", b"p") for i in range(1, 12)]
     assert telegram.send_images(7, pngs + [("12.gif", b"g"), ("13.jpg", b"j" * (10 * 2**20 + 1))], reply=55) == list(range(600, 613))
     assert [(c[0], c[1]) for c in calls] == [("sendMediaGroup", [f"p{i}" for i in range(10)]), ("sendPhoto", ["photo"]), ("sendDocument", ["document"]), ("sendDocument", ["document"])], calls
-    assert calls[0][2]["media"][9] == {"type": "photo", "media": "attach://p9"} and calls[0][2]["reply_parameters"]["message_id"] == 55 and calls[0][2]["message_thread_id"] == 7, calls[0]
+    assert calls[0][2]["media"][9] == {"type": "photo", "media": "attach://p9"} and calls[0][2]["reply_parameters"]["message_id"] == 55 and calls[0][2]["message_thread_id"] == 7 and calls[0][2]["disable_notification"], calls[0]
     calls = []
     assert len(telegram.send_images(7, [("1.png", b"p"), ("2.png", b"wide")])) == 2 and [c[0] for c in calls] == ["sendMediaGroup", "sendDocument", "sendDocument"] and calls[-1][2]["reply_parameters"] is None, calls
 

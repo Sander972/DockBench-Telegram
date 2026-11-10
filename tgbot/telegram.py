@@ -71,7 +71,7 @@ def send(thread, text, reply=None, markup=None, md=False, tag=None):
     ids = []
     for i, part in enumerate(parts):
         head = f"{tag()}\n" if tag else ""
-        params = {"chat_id": state.GROUP_ID, "message_thread_id": thread, "reply_parameters": {"message_id": reply, "allow_sending_without_reply": True} if reply and i == 0 else None, "reply_markup": markup if i == len(parts) - 1 else None}
+        params = {"chat_id": state.GROUP_ID, "message_thread_id": thread, "reply_parameters": {"message_id": reply, "allow_sending_without_reply": True} if reply and i == 0 else None, "reply_markup": markup if i == len(parts) - 1 else None, "disable_notification": True}  # silent: a buzz per status split, answer and image is too much
         if md:
             try:
                 ids.append(tg("sendMessage", text=html.escape(head) + markdown.md_html(part), parse_mode="HTML", **params)["message_id"])
@@ -86,7 +86,7 @@ def send(thread, text, reply=None, markup=None, md=False, tag=None):
 
 def send_images(thread, images, reply=None, caption=None):
     """images: (filename, bytes). Photos go in albums of up to 10; a GIF, an image over Telegram's 10 MB photo limit, and an album Telegram refuses (an image too long or wide) go one by one as files. caption: on every photo, album and file (a session's badge()). Returns the message ids."""
-    params = {"chat_id": state.GROUP_ID, "message_thread_id": thread, "reply_parameters": {"message_id": reply, "allow_sending_without_reply": True} if reply else None}
+    params = {"chat_id": state.GROUP_ID, "message_thread_id": thread, "reply_parameters": {"message_id": reply, "allow_sending_without_reply": True} if reply else None, "disable_notification": True}
     photos = [i for i in images if not i[0].endswith(".gif") and len(i[1]) <= 10 * 2**20]
     docs, ids = [i for i in images if i not in photos], []
     for n in range(0, len(photos), 10):
