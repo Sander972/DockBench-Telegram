@@ -554,6 +554,32 @@ def self_check():
     routing.handle({"update_id": 13, "message": topic_msg(408, "/clean", reply=12345)}, {})
     assert [m for m, p in calls] == ["sendMessage"] and "not part of a session" in calls[0][1]["text"] and "80" in state.STATE["sessions"], calls
     state.ACTIVE.clear()
+    # /purge: asks first; Purge stops the topic's runs, deletes the topic, forgets its sessions and makes a new topic of the bound name with its settings; refused delete changes nothing
+    threads, real_stop, stopped = dict(state.STATE["threads"]), runs.stop, []
+    state.STATE["threads"]["7"] = {"name": "proj", "model": "opus", "pin": 5}
+    state.STATE["sessions"].update({"91": {"tid": 7}, "92": {"tid": 8}})
+    state.STATE["replies"].update({"91": 91, "93": 91, "92": 92})
+    state.ACTIVE[91] = runs.Run(91, 7)
+    state.PENDING.update({600: {"tid": 7}, 601: {"tid": 8}})
+    runs.stop = lambda k: stopped.append(k) or state.ACTIVE.pop(k)
+    calls = []
+    routing.handle({"update_id": 14, "message": topic_msg(409, "/purge")}, {})
+    assert [b["callback_data"] for b in calls[0][1]["reply_markup"]["inline_keyboard"][0]] == ["purgego:7", "purgeno"] and "91" in state.STATE["sessions"], calls
+    telegram.tg = lambda method, **p: calls.append((method, p)) or ((_ for _ in ()).throw(telegram.TgError("not enough rights")) if method == "deleteForumTopic" else {"message_id": 911})
+    tap("purgego:7", 911)
+    assert calls[-2][0] == "editMessageText" and "nothing deleted" in calls[-2][1]["text"] and "91" in state.STATE["sessions"] and state.STATE["threads"]["7"]["name"] == "proj", calls[-2:]
+    calls = []
+    telegram.tg = lambda method, **p: calls.append((method, p)) or ({"message_thread_id": 77} if method == "createForumTopic" else {"message_id": 912})
+    tap("purgego:7", 911)
+    assert [m for m, p in calls][:3] == ["editMessageText", "deleteForumTopic", "createForumTopic"] and calls[1][1]["message_thread_id"] == 7 and calls[2][1]["name"] == "proj" and calls[-2][1]["message_thread_id"] == 77, calls
+    assert stopped == [91] and "7" not in state.STATE["threads"] and state.STATE["threads"]["77"] == {"name": "proj", "model": "opus"} and "91" not in state.STATE["sessions"] and "92" in state.STATE["sessions"], state.STATE
+    assert set(state.STATE["replies"]) >= {"92"} and not {"91", "93"} & set(state.STATE["replies"]) and set(state.PENDING) == {601}, (state.STATE["replies"], state.PENDING)
+    calls = []
+    tap("purgego:7", 911)  # a tap on an old question: the topic is gone, nothing happens
+    tap("purgeno", 913)
+    assert [m for m, p in calls if m != "answerCallbackQuery"] == ["deleteMessage"], calls
+    runs.stop, state.STATE["threads"] = real_stop, threads
+    state.PENDING.clear()
     routing.threading = real_threading
 
     # a session's badge: close keys differ in shape and color; its tag: Claude's title once it has one, else the badge, and the message's number in the session, which send() puts on top of every part, still within 4096

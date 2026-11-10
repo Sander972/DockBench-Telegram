@@ -24,6 +24,10 @@ def command(tid, cmd, arg, m):
         if (m.get("reply_to_message") or {}).get("message_id", tid) != tid:  # a real reply, not the topic's implicit one: never fall back to cleaning the whole topic
             return telegram.send(tid, "that message is not part of a session the bot knows, nothing cleaned", reply=m["message_id"])
         return clean(tid)
+    if cmd == "purge":
+        if not cfg.get("name"):
+            return telegram.send(tid, "unbound topic: delete it from Telegram instead")
+        return telegram.send(tid, f"Delete this topic with every message in it, and stop its running sessions? A new topic {cfg['name']} replaces it, and none of its sessions can be continued from Telegram.", markup={"inline_keyboard": [[telegram.button("✔ Purge", f"purgego:{tid}"), telegram.button("✖ Cancel", "purgeno")]]})
     if cmd == "stop":
         if key := state.session_of([m]):
             return telegram.send(tid, runs.stop(key), reply=m["message_id"], tag=lambda: runs.label(key))
@@ -48,6 +52,17 @@ def clean(tid, mid=None, key=None):
             telegram.edit(mid, note) if mid else telegram.send(tid, note)
         except Exception:
             log.exception("thread %s: clean failed", tid)
+    threading.Thread(target=work, daemon=True).start()
+
+
+def purge(tid, mid):
+    """The /purge confirmation on message mid: runs.purge() waits for stopped runs, so off the polling thread. A refused delete is edited into the question."""
+    def work():
+        try:
+            runs.purge(tid)
+        except Exception as e:
+            log.exception("thread %s: purge failed", tid)
+            telegram.edit(mid, f"purge failed ({type(e).__name__}), nothing deleted: deleting a topic needs the bot's Delete messages admin right")
     threading.Thread(target=work, daemon=True).start()
 
 
@@ -78,7 +93,7 @@ def status_text(tid, cfg):
 
 
 def callback(cq):
-    """A tap on an inline button: the model, effort and permission mode of a waiting request, Stop on a status message, or Push or Clean on a pin and its confirmation. Allowlisted like messages, and a stranger's tap is not answered."""
+    """A tap on an inline button: the model, effort and permission mode of a waiting request, Stop on a status message, or Push or Clean on a pin and its confirmation, or the /purge confirmation. Allowlisted like messages, and a stranger's tap is not answered."""
     msg = cq.get("message") or {}
     if (msg.get("chat") or {}).get("id") != state.GROUP_ID or (cq.get("from") or {}).get("id") != state.OWNER_ID:
         return
@@ -105,6 +120,13 @@ def callback(cq):
         elif data == "cleanno":
             telegram.delete(pid)
         if data.startswith("clean"):
+            return
+        if data.startswith("purgego:") and data[8:].isdigit() and state.settings(int(data[8:])).get("name"):  # a tap after the purge finds the topic unbound; a double tap fails at deleteForumTopic
+            telegram.edit(pid, "purging…")
+            purge(int(data[8:]), pid)
+        elif data == "purgeno":
+            telegram.delete(pid)
+        if data.startswith("purge"):
             return
         with state.LOCK:
             p = state.PENDING.get(pid)

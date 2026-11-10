@@ -61,6 +61,8 @@ The extension loads a session when you open it and does not follow a run that is
 
 `/clean` deletes the requests, answers and leftover status messages of the topic's idle sessions. Sent as a reply to a session's message (`/clear` works too, since Claude's own `/clear` does nothing in a headless run), it deletes only that session, and refuses one that is running; a reply to a message the bot does not know cleans nothing, so a mistaken reply never empties the whole topic.
 
+`/purge` empties the whole topic, which `/clean` cannot: the Bot API cannot list a topic's messages, so the bot deletes the topic itself (`deleteForumTopic`, which needs the Delete messages admin right) and creates a new one named after the bound `PROJECT` (`createForumTopic`, Manage topics). After the confirmation tap it stops the topic's sessions, drops its waiting pickers and gives the stopped runs up to 30 seconds to post their last reply. The new topic keeps the old one's binding and last pick; the old topic's sessions are forgotten. If the delete is refused nothing else changes; if the create fails, General says so and a topic created by hand with the `PROJECT` name binds itself.
+
 ### Limits and recovery
 
 - Limits. A run that looks hung is killed: nothing written to its session and almost no CPU for 15 minutes. Busy runs (builds, tests, subagents) keep going, up to 4 hours or 180 turns. The session is kept, so a reply continues it.

@@ -19,7 +19,7 @@ BUSY_CPU = 0.05
 # Only the bot's own runs start like this (see claude.claude_cmd), never an interactive or VS Code claude, so pkill on it is safe.
 NICE = "10"  # niceness of the runs and of the usage pass: the Claude Code starts the bot asks for give way to interactive work
 RUN_MARK = "^timeout -k 30 [0-9]+ (nice -n [0-9]+ )?claude -p "  # the nice part is optional so a restarted bot still finds the runs an older version started
-COMMANDS = ("bind", "clean", "clear", "help", "push", "status", "stop")
+COMMANDS = ("bind", "clean", "clear", "help", "purge", "push", "status", "stop")
 NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 MODELS = ("fable", "opus", "sonnet", "haiku")
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
@@ -29,7 +29,7 @@ DEFAULT_PERM = "auto"  # sessions started before the picker asked the mode ran i
 HIDDEN_COMMANDS = frozenset({"advisor", "agents", "auto-mode-setup", "autocompact", "backup", "clear", "color", "config", "design-consent", "design-revoke", "doctor", "effort", "extra-usage", "fast", "focus", "goal", "heapdump", "import", "list-agents", "mcp", "model", "output-style", "release-notes", "reload-plugins", "reload-skills", "rename", "team-onboarding", "usage-credits", "workflow-launch-exec"})
 HIDDEN_PREFIXES = ("superpowers:", "_")
 # the bot's own entries of the Telegram command menu, before Claude's (Telegram allows 100 in all)
-BOT_MENU = (("status", "Container state and the sessions of this topic"), ("stop", "Stop the sessions of this topic, or the replied-to one"), ("push", "Push a repo's commits, after a confirmation"), ("clean", "Delete the idle sessions' messages, or the replied-to one's"), ("bind", "Link this topic to dockbench-<PROJECT>"), ("setup", "Check what the bot needs in this group"), ("help", "How the bot works"))
+BOT_MENU = (("status", "Container state and the sessions of this topic"), ("stop", "Stop the sessions of this topic, or the replied-to one"), ("push", "Push a repo's commits, after a confirmation"), ("clean", "Delete the idle sessions' messages, or the replied-to one's"), ("purge", "Delete this topic with every message, after a confirmation"), ("bind", "Link this topic to dockbench-<PROJECT>"), ("setup", "Check what the bot needs in this group"), ("help", "How the bot works"))
 MAX_SESSIONS = 300  # sessions kept in state.json for replies; the oldest idle ones are forgotten first
 PIN_IDLE = 10  # idle sessions listed on a topic's pin, newest first; the rest are counted, so the pin stays far below Telegram's 4096 characters
 PROBE_EVERY = 1800  # seconds between two checks that a listed idle session still has a message in the chat (pins.sweep)
@@ -53,6 +53,7 @@ The pinned message of each topic shows the workspace repo, its branch, the commi
 /stop - stop every session running in this topic; as a reply to a session, only that one
 /push [repo] - push the commits of the workspace repo, or of a repo folder inside it, to its upstream (asks first; with several to push, asks which; also the Push buttons on the pin)
 /clean - delete the messages of the sessions of this topic that are not running (requests, answers, status messages); they can no longer be continued from Telegram (also the Clean button on the pin, after a confirmation). As a reply to a session (also /clear), only that one
+/purge - delete every message of this topic, running sessions too: the topic is deleted and created again under the same name (asks first)
 /bind <PROJECT> - link this topic to dockbench-<PROJECT>
 /setup - check what the bot needs in this group (also /start, which the dashboard's claim and Add to group links send)
 /help

@@ -367,6 +367,41 @@ def clean(tid, key=None):
     return note
 
 
+def purge(tid):
+    """/purge confirmed: stop the topic's sessions, delete the topic with every message in it (a bot cannot list a topic's messages, so deleting them one by one would miss some), then create a new topic of the bound name with the same settings and forget the old topic's sessions. Returns the new topic's id. Slow, so not on the polling thread."""
+    name = state.settings(tid)["name"]
+    with state.LOCK:
+        keys = [k for k, r in state.ACTIVE.items() if r.tid == tid]
+        for pid in [p for p, w in state.PENDING.items() if w["tid"] == tid]:
+            state.PENDING.pop(pid)
+    for k in keys:
+        stop(k)
+    for _ in range(30):  # a stopped run still posts its reply: let it land before its topic goes
+        with state.LOCK:
+            if not any(r.tid == tid for r in state.ACTIVE.values()):
+                break
+        time.sleep(1)
+    telegram.tg("deleteForumTopic", chat_id=state.GROUP_ID, message_thread_id=tid)  # first: if refused, nothing has changed
+    with state.LOCK:
+        cfg = state.STATE["threads"].pop(str(tid), {})
+        gone = {k for k, s in state.STATE["sessions"].items() if s.get("tid") == tid}
+        for k in gone:
+            del state.STATE["sessions"][k]
+        state.STATE["replies"] = {m: k for m, k in state.STATE["replies"].items() if str(k) not in gone}
+        state.save()
+    log.info("thread %s: purged, %d sessions forgotten", tid, len(gone))
+    try:
+        new = telegram.tg("createForumTopic", idempotent=False, chat_id=state.GROUP_ID, name=name)["message_thread_id"]
+    except telegram.TgError as e:  # the name stays in STATE["created"], so autocreate cannot make a duplicate: a topic created by hand binds by its name
+        log.warning("thread %s: purged, but no new topic: %s", tid, e)
+        telegram.send(None, f"The topic of dockbench-{name} was purged, but a new one could not be created ({type(e).__name__}): create a topic named {name}.")
+        return None
+    state.update(new, **{k: v for k, v in cfg.items() if k not in ("pin", "pinned", "working")})
+    pins.WAKE.set()
+    telegram.send(new, f"dockbench-{name}: the old topic was deleted with all its messages and {len(gone)} session(s). Post a prompt here to start a new session.")
+    return new
+
+
 def recover():
     """A fresh process owns no runs, but a docker exec outlives the client that started it: kill what a previous instance left running, and tell its requests."""
     for _ in range(12):  # a socket proxy restarted with the bot may need a moment
