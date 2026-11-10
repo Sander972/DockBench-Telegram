@@ -4,13 +4,13 @@ import json
 import re
 
 from . import dockerapi
-from .config import DEFAULT_PERM, DEFAULT_PROMPT, INBOX, OUTBOX_PROMPT, RUN_TIMEOUT, TITLE_MAX
+from .config import DEFAULT_PERM, DEFAULT_PROMPT, INBOX, NICE, OUTBOX_PROMPT, RUN_TIMEOUT, TITLE_MAX
 
 
 def claude_cmd(cfg, prompt, sid, resume, out):
     """out: the session's outbox folder, named in the appended system prompt."""
-    # timeout kills the whole process group, so tool subprocesses die too and the exec stream closes. "--" keeps a prompt starting with "-" from being read as a flag.
-    return ["timeout", "-k", "30", str(RUN_TIMEOUT), "claude", "-p",
+    # timeout kills the whole process group, so tool subprocesses die too and the exec stream closes. nice: a run and its tools yield the cores to the container's VS Code and to other containers (a Claude Code start alone takes ~1.5 cores for 2 s). "--" keeps a prompt starting with "-" from being read as a flag.
+    return ["timeout", "-k", "30", str(RUN_TIMEOUT), "nice", "-n", NICE, "claude", "-p",
             "--model", cfg["model"], "--effort", cfg["effort"], "--permission-mode", cfg.get("perm") or DEFAULT_PERM,
             "--permission-prompts", "none", "--add-dir", INBOX, "--add-dir", out, "--append-system-prompt", OUTBOX_PROMPT.format(dir=out),
             "--output-format", "stream-json", "--verbose", "--max-turns", "180",

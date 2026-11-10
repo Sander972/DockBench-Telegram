@@ -5,9 +5,9 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 from . import dockerapi, state, telegram
-from .config import log
+from .config import NICE, log
 
-EVERY = 10 * 60  # seconds between passes when no run starts or ends
+EVERY = 10 * 60  # seconds between passes when no run ends
 MIN_GAP = 120  # seconds at least between two passes, also after a WAKE: each pass starts a Claude Code (`claude -p /usage`) per account, a few hundred MB and seconds of CPU
 WAKE = threading.Event()  # set when a run starts or ends: a prompt sent to an account, or its answer back, shows in its limits without waiting for the next pass
 SHOWN = None  # (message id, text) last shown, so an unchanged message is not edited
@@ -15,7 +15,7 @@ ACCOUNTS = {}  # container id -> (dockbench-agent claude-key, account()): `claud
 
 # Both are local commands: Claude answers without a model call, so they cost nothing (checked with Claude Code 2.1.306). The container's own Claude reads the limits with its own credentials, so the bot never handles a token. Not persisted, and RUN_MARK does not match them, so recover() and /stop leave them alone.
 AUTH = ["timeout", "30", "claude", "auth", "status"]
-USAGE = ["timeout", "60", "claude", "-p", "--no-session-persistence", "--", "/usage"]
+USAGE = ["timeout", "60", "nice", "-n", NICE, "claude", "-p", "--no-session-persistence", "--", "/usage"]
 
 
 def account(cid):

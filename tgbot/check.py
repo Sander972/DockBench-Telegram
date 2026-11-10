@@ -151,14 +151,15 @@ def self_check():
 
     pick = {"model": "opus", "effort": "high"}
     cmd = claude.claude_cmd(pick, "-x", "abc", True, "/o/7")
-    assert cmd[-4:] == ["--resume", "abc", "--", "-x"] and cmd[:5] == ["timeout", "-k", "30", str(RUN_TIMEOUT), "claude"]
+    assert cmd[-4:] == ["--resume", "abc", "--", "-x"] and cmd[:8] == ["timeout", "-k", "30", str(RUN_TIMEOUT), "nice", "-n", "10", "claude"]
     assert cmd[cmd.index("--model") + 1] == "opus" and cmd[cmd.index("--effort") + 1] == "high" and cmd[cmd.index("--permission-mode") + 1] == "auto", cmd  # a session from before the mode step
     assert [cmd[i + 1] for i, a in enumerate(cmd) if a == "--add-dir"] == [INBOX, "/o/7"] and "/o/7:" in cmd[cmd.index("--append-system-prompt") + 1], cmd
     plan = claude.claude_cmd(dict(pick, perm="plan"), "p", "abc", False, "/o/7")
     assert plan[plan.index("--permission-mode") + 1] == "plan" and re.match(RUN_MARK, " ".join(plan)), plan
     assert claude.claude_cmd(pick, "p", "abc", False, "/o/7")[-4:-2] == ["--session-id", "abc"]
     line = " ".join(cmd)  # what pkill -f matches against
-    assert re.match(f"{RUN_MARK}.* abc -- ", line) and not re.match(RUN_MARK, "claude --output-format stream-json --verbose --input-format stream-json --resume=abc")
+    assert re.match(f"{RUN_MARK}.* abc -- ", line) and re.match(f"{RUN_MARK}.* abc -- ", f"timeout -k 30 {RUN_TIMEOUT} claude -p --resume abc -- x")  # a run started before nice was added
+    assert not re.match(RUN_MARK, " ".join(usage.USAGE)) and not re.match(RUN_MARK, " ".join(commands.PROBE)) and not re.match(RUN_MARK, "claude --output-format stream-json --verbose --input-format stream-json --resume=abc")
 
     # the picker: every button fits Telegram's 64-byte callback_data, the model step offers the last pick, the effort step every level, the mode step every mode
     text, kb = telegram.picker("a", None, None, ("opus", "high", "plan"))
@@ -666,7 +667,7 @@ def self_check():
     dockerapi.agent = lambda cid, args, timeout=60: None  # the agent gives no fingerprint: account() on every pass
     report = usage.report()
     assert report == "👤 me@x (max) · a, b\nCurrent session: 2% used · resets Nov 2, 9:20pm (UTC)\nCurrent week (all models): 53% used · resets Nov 3, 1am (UTC)\n\n👤 two@x · f\nusage unavailable: Error: rate limited\n\nnot signed in: c\nerror: e\nnot running: d", report
-    assert sorted(c for c, k in execs if k == "-p") == ["a", "f"], execs
+    assert sorted(c for c, k in execs if k == usage.USAGE[3]) == ["a", "f"], execs
     assert not usage.ACCOUNTS, usage.ACCOUNTS
 
     # with the agent's fingerprint, `claude auth status` reruns only when it changes; a stopped container's entry goes

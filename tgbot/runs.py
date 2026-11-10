@@ -166,8 +166,7 @@ def run(r, update_id, msgs, status):
         state.link(key, [status])
     r.status, r.started, r.req, r.turns, r.dirty = status, time.monotonic(), req, [], False
     r.active, r.probe, r.idle = r.started, None, False
-    pins.WAKE.set()
-    usage.WAKE.set()
+    pins.WAKE.set()  # no usage.WAKE here: its pass is another whole Claude Code start, which would land on this run's own start; the one when the run ends is enough
     state.sess_update(key, working=status, req=req, at=int(time.time()))  # lets a restarted bot tell this request that the run was killed
     out = f"{OUTBOX}/{key}"
     try:
