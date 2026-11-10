@@ -2,6 +2,7 @@
 import http.client
 import json
 import re
+import time
 
 from . import dockerapi
 from .config import DEFAULT_PERM, DEFAULT_PROMPT, INBOX, NICE, OUTBOX_PROMPT, RUN_TIMEOUT, TITLE_MAX
@@ -72,15 +73,36 @@ def parse_stream(frames_iter, on_session, on_text=None):
     return result, err.decode(errors="replace").strip(), init
 
 
+def gone(cid, sid):
+    """Whether the agent answered that session sid's run is no longer in the container; an agent that gives no answer does not count."""
+    r = dockerapi.agent(cid, ["activity", sid])
+    return r is not None and r[0] == 3
+
+
 def run_claude(cid, cfg, prompt, sid, resume, out, on_session, on_text=None):
-    eid, resp = dockerapi.exec_start(cid, claude_cmd(cfg, prompt, sid, resume, out), timeout=RUN_TIMEOUT + 300)
+    """(result event or None, exit code or None, stderr tail, init event or None) of one run through the agent's /exec."""
+    code = None
+
+    def output(frames):  # the exit code frame is not Claude's output
+        nonlocal code
+        for kind, data in frames:
+            if kind == 3:
+                code = int(data) if data.isdigit() else None
+            else:
+                yield kind, data
     try:
-        with resp:
-            result, err, init = parse_stream(dockerapi.frames(resp), on_session, on_text)
+        result, err, init = parse_stream(output(dockerapi.exec_frames(cid, claude_cmd(cfg, prompt, sid, resume, out), timeout=RUN_TIMEOUT + 300)), on_session, on_text)
+        lost = None
     except (OSError, http.client.HTTPException) as e:
-        # A socket proxy cuts streams that stay silent for 10 min, but the run goes on: wait for it below, so a topic never has two runs at once.
-        result, err, init = None, f"Lost the output stream from Docker ({type(e).__name__}). The run went on in the container; open its session in VS Code to see what it did.", None
-    return result, dockerapi.exec_exit(eid, RUN_TIMEOUT + 60), err, init
+        lost = type(e).__name__
+    if code is None:
+        # the stream was lost or ended without an exit code, but the run may go on: wait until the agent says it is gone, so a session never has two runs at once
+        end = time.monotonic() + RUN_TIMEOUT + 60
+        while not gone(cid, sid) and time.monotonic() < end:
+            time.sleep(5)
+    if lost:
+        result, err, init = None, f"Lost the output stream ({lost}). The run went on in the container; open its session in VS Code to see what it did.", None
+    return result, code, err, init
 
 
 def tool_notes(init, perm=DEFAULT_PERM):

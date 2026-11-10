@@ -4,11 +4,10 @@ import queue
 import re
 import threading
 import time
-import urllib.parse
 import uuid
 
 from . import claude, commands, dockerapi, pins, state, telegram, usage
-from .config import BUSY_CPU, DEFAULT_PERM, IDLE_LIMIT, IMAGE_EXTS, INBOX, MAX_IMAGES, OUTBOX, OUTBOX_MAX, RUN_TIMEOUT, log
+from .config import BUSY_CPU, DEFAULT_PERM, IDLE_LIMIT, IMAGE_EXTS, MAX_IMAGES, OUTBOX, OUTBOX_MAX, RUN_TIMEOUT, log
 
 # a session id the container's claude reports is kept only as a UUID: it goes into --resume and the agent's stop route later, and the container is not trusted
 SID_RE = re.compile(r"[0-9a-f-]{36}")
@@ -171,12 +170,12 @@ def run(r, update_id, msgs, status):
         files = []
         for n, (file_id, is_image) in enumerate(telegram.attachments(msgs)):
             ext, data = telegram.download(file_id)
-            files.append((f"{update_id}-{n}{ext}", data, is_image))
+            files.append((f"{update_id}-{n}{ext if re.fullmatch(r'[.][A-Za-z0-9]{1,10}', ext) else '.bin'}", data, is_image))  # the agent takes only names of letters, digits, . _ -
         # the agent drops old attachments, or the home volume grows with every photo, and empties the outbox, so it holds only this run's images
         if dockerapi.agent(c["Id"], ["prepare", str(key)]) is None:
             raise RuntimeError(f"dockbench-agent in dockbench-{name} gave no answer, prompt not run: update its image (DockBench from 2026-11-10 or later)")
-        if files:
-            dockerapi.docker("PUT", f"/containers/{c['Id']}/archive?path={urllib.parse.quote(INBOX)}", dockerapi.tarball([(f, d) for f, d, _ in files]))
+        for f, d, _ in files:
+            dockerapi.put_inbox(c["Id"], f, d)
     except Exception:
         r.status = None
         state.sess_update(key, working=None)

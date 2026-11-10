@@ -56,10 +56,11 @@ flowchart LR
     end
     you --> tg
     bot -- long polling --> tg
-    bot --> sock -- exec as user dev --> dev
+    bot -- reads --> sock
+    bot -- runs as user dev, over devnet --> dev
 ```
 
-The bot long-polls Telegram over outbound HTTPS and runs `claude -p` in your dev containers through the Docker socket. It publishes no port, needs nothing beyond the Python standard library, and keeps its state in one JSON file that never holds message text. [DEV-README.md](DEV-README.md#architecture) has the details.
+The bot long-polls Telegram over outbound HTTPS and runs `claude -p` in your dev containers through the DockBench image's `dockbench-agent`, on the `devnet` network; Docker is only read, to list the containers and fetch files. It publishes no port, needs nothing beyond the Python standard library, and keeps its state in one JSON file that never holds message text. [DEV-README.md](DEV-README.md#architecture) has the details.
 
 ## Getting started
 

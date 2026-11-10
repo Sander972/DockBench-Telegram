@@ -72,10 +72,7 @@ def translate(text, name=None):
 
 def probe(cid):
     """The init event of a probe run in the container, None when there is none (Claude not installed, a crash)."""
-    eid, resp = dockerapi.exec_start(cid, PROBE, timeout=90)
-    with resp:
-        out = b"".join(data for kind, data in dockerapi.frames(resp) if kind == 1)  # stdout only: a stderr frame could split a JSON line
-    dockerapi.exec_exit(eid)
+    out = b"".join(data for kind, data in dockerapi.exec_frames(cid, PROBE, timeout=90) if kind == 1)  # stdout only: a stderr frame could split a JSON line
     for line in out.splitlines():
         try:
             ev = json.loads(line)

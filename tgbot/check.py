@@ -17,6 +17,7 @@ from .config import BOT_MENU, DEFAULT_PROMPT, EFFORTS, IDLE_LIMIT, INBOX, MAX_SE
 
 
 def self_check():
+    real_dev, real_container, real_exec_run = dockerapi.dev_containers, dockerapi.container, dockerapi.exec_run  # stubbed below and never restored
     parts = markdown.chunks(("para " * 300 + "\n\n") * 10 + "x" * 9000)
     assert all(len(p) <= 4096 for p in parts), [len(p) for p in parts]
     assert "".join(parts).replace("\n", "").replace(" ", "") == (("para" * 300) * 10 + "x" * 9000), "content lost"
@@ -32,9 +33,6 @@ def self_check():
     raw = b"".join(bytes([k, 0, 0, 0]) + len(d).to_bytes(4, "big") + d for k, d in [(1, b"ab"), (2, b"err"), (1, b"")])
     assert list(dockerapi.frames(io.BytesIO(raw))) == [(1, b"ab"), (2, b"err"), (1, b"")]
 
-    with tarfile.open(fileobj=io.BytesIO(dockerapi.tarball([("1-0.jpg", b"img")]))) as t:
-        info = t.getmember("1-0.jpg")
-        assert (info.uid, info.gid, info.size) == (1000, 1000, 3) and t.extractfile(info).read() == b"img"
 
     # the outbox tar from the container: regular files only, named inside the folder; over the limit raises
     buf = io.BytesIO()
@@ -465,8 +463,8 @@ def self_check():
     assert len(cmds) == 100 and [c["command"] for c in cmds[:len(BOT_MENU)]] == [c for c, _ in BOT_MENU] and all(re.fullmatch(r"[a-z0-9_]{1,32}", c["command"]) and 1 <= len(c["description"]) <= 256 for c in cmds), cmds[:8]
     init_line = json.dumps({"type": "system", "subtype": "init", "slash_commands": ["opt"]}).encode()
     probe_out = b"".join(bytes([k, 0, 0, 0]) + len(d).to_bytes(4, "big") + d for k, d in [(1, b'{"type": "system", "subtype": "hook_started"}\n' + init_line[:9]), (2, b"warn\n"), (1, init_line[9:] + b"\n")])
-    real_start, real_exit = dockerapi.exec_start, dockerapi.exec_exit
-    dockerapi.exec_start, dockerapi.exec_exit = (lambda cid, cmd, timeout=60: ("e1", io.BytesIO(probe_out))), (lambda eid, wait=2: 0)
+    real_frames = dockerapi.exec_frames
+    dockerapi.exec_frames = lambda cid, cmd, timeout=60: dockerapi.frames(io.BytesIO(probe_out + bytes([3, 0, 0, 0, 0, 0, 0, 1]) + b"0"))
     try:
         assert commands.probe("cid")["slash_commands"] == ["opt"]
         # refresh() probes a bound running container once, then sends the menu only when it changed
@@ -479,7 +477,7 @@ def self_check():
         assert state.STATE["commands"] == {"a": ["opt"]} and state.STATE["skills"] == {"a": []} and commands.PROBED == {"a"} and [c[0] for c in calls] == ["setMyCommands"], (state.STATE["commands"], calls)
         assert calls[0][1]["scope"] == {"type": "chat", "chat_id": state.GROUP_ID} and calls[0][1]["commands"][-1] == {"command": "opt", "description": "⚙️ command · /opt"}, calls
     finally:
-        dockerapi.exec_start, dockerapi.exec_exit = real_start, real_exit
+        dockerapi.exec_frames = real_frames
 
     # push: asks first, then one plain-argv git push that cannot prompt, with the remote hidden; refused while a session of the container runs or with nothing ahead
     calls, pushed = [], []
@@ -775,7 +773,7 @@ def self_check():
             raise dockerapi.DockerError("GET /containers/new/archive: 404 no such file")
         return [("", tok[cid])]
 
-    def fake_http(method, url, headers, timeout):
+    def fake_http(method, url, headers, timeout, body=None, stream=False):
         route = url.split("/", 3)[3].split("?")[0]
         assert method == dockerapi.ROUTES[route][0], (method, route)
         http.append((url, headers["Authorization"]))
@@ -812,7 +810,7 @@ def self_check():
     # a run through the agent: prepare before claude, outbox-clear after the answer; Stop, the watchdog and a bot restart stop runs through it too; an agent without the routes stops a prompt with a note and starts no claude
     order, agent_http = [], {}
 
-    def agent_fake(method, url, headers, timeout):
+    def agent_fake(method, url, headers, timeout, body=None, stream=False):
         route = url.split("/", 3)[3]
         order.append(f"{method} {route}")
         code = agent_http.get(route.split("?")[0], 200)
@@ -855,6 +853,91 @@ def self_check():
     runs.recover()
     assert order == ["POST stop-all", "POST stop-all"], order
     claude.run_claude, dockerapi.get_files, dockerapi.http = real_claude, real_files2, real_http
+    dockerapi.NAMES.clear(), dockerapi.TOKENS.clear()
+
+    # every process starts through the agent's /exec: frames as Docker's, the exit code in a stream-3 frame, the argv and env as JSON byte for byte; uploads go to /inbox; a lost stream waits until the agent says the run is gone; Docker only ever sees GETs
+    def fr(*fs):
+        return b"".join(bytes([k, 0, 0, 0]) + len(d).to_bytes(4, "big") + d for k, d in fs)
+
+    class Cut(io.BytesIO):  # a stream that breaks once its bytes are read
+        def read(self, n=-1):
+            data = super().read(n)
+            if not data:
+                raise ConnectionResetError("reset")
+            return data
+    sent, streams, activity = [], [], []
+
+    def p3_http(method, url, headers, timeout, body=None, stream=False):
+        route = url.split("/", 3)[3]
+        sent.append((method, route, body))
+        if route == "exec":
+            assert stream and method == "POST"
+            return streams.pop(0)
+        if route.startswith("activity"):
+            a = activity.pop(0) if activity else 204
+            if isinstance(a, Exception):
+                raise a
+            return a, b"" if a == 204 else b"1.0 5\n"
+        if route.startswith("pin-info"):
+            return 200, json.dumps({"git": {"repo": "r", "branch": "main", "oid": "0123456789abcdef", "upstream": True, "gone": False, "ahead": 1}, "subs": []}).encode()
+        if route == "account":
+            return 200, b'{"loggedIn": true, "email": "me@x", "plan": "max"}'
+        return 200, b"ok\n"
+    dockerapi.http, dockerapi.exec_run = p3_http, real_exec_run
+    dockerapi.NAMES.update(cid="dockbench-a")
+    dockerapi.TOKENS.update(cid="t")
+    streams.append(io.BytesIO(fr((1, b"a"), (2, b"b"), (3, b"5"))))
+    assert dockerapi.exec_run("cid", ["x"]) == (5, b"ab")
+    streams.append(io.BytesIO(fr((1, b"a"))))
+    assert dockerapi.exec_run("cid", ["x"]) == (None, b"a")
+    assert json.loads(sent[-1][2]) == {"cmd": ["x"], "env": ["HOME=/home/dev", "CLAUDE_CODE_ENTRYPOINT=claude-vscode"]}, sent[-1]
+    prompt = "-x \"q\" 'y'\n😀" + "z" * 20000
+    init = json.dumps({"type": "system", "subtype": "init", "session_id": "s"}).encode() + b"\n"
+    streams.append(io.BytesIO(fr((1, init), (2, b"warn"), (1, json.dumps({"type": "result", "result": "done"}).encode() + b"\n"), (3, b"0"))))
+    result, code, err, got_init = claude.run_claude("cid", {"model": "opus", "effort": "high"}, prompt, "sid-1", False, "/o/7", lambda s: None)
+    body = json.loads(sent[-1][2])
+    assert (result["result"], code, err, got_init["subtype"]) == ("done", 0, "warn", "init") and body["cmd"] == claude.claude_cmd({"model": "opus", "effort": "high"}, prompt, "sid-1", False, "/o/7") and body["cmd"][-1] == prompt and body["env"] == ["HOME=/home/dev", "CLAUDE_CODE_ENTRYPOINT=claude-vscode"], (result, code, err)
+    # the stream breaks after the init event: no second run until the agent answers 204; no answer (unreachable) keeps waiting
+    naps, clock = [], [0.0]
+    claude.time = types.SimpleNamespace(sleep=lambda t: naps.append(t) or clock.__setitem__(0, clock[0] + t), monotonic=lambda: clock[0])
+    streams.append(Cut(fr((1, init))))
+    activity[:] = [(200), OSError("refused"), (200), 204]
+    result, code, err, _ = claude.run_claude("cid", {"model": "opus", "effort": "high"}, "p", "sid-1", False, "/o/7", lambda s: None)
+    assert result is None and code is None and err.startswith("Lost the output stream (ConnectionResetError)") and "Docker" not in err and naps == [5, 5, 5], (err, naps)
+    naps.clear()
+    streams.append(Cut(fr((1, init))))
+    activity[:] = [OSError("refused")] * 10 ** 4
+    claude.run_claude("cid", {"model": "opus", "effort": "high"}, "p", "sid-1", False, "/o/7", lambda s: None)
+    assert len(naps) == (RUN_TIMEOUT + 60) // 5, len(naps)
+    claude.time = time
+    activity.clear()
+    # a whole run with a photo, a push and a usage pass: the attachment goes to /inbox, and Docker sees only GETs
+    methods = []
+
+    def get_only(method, path, timeout=60, stream=False):
+        methods.append(method)
+        if path.startswith("/containers/json"):
+            return [{"Id": "cid", "Names": ["/dockbench-a"], "State": "running"}]
+        empty = io.BytesIO()
+        tarfile.open(fileobj=empty, mode="w").close()
+        return io.BytesIO(empty.getvalue())
+    dockerapi.docker, dockerapi.dev_containers, dockerapi.container, dockerapi.LIVE = get_only, real_dev, real_container, False
+    real_att, real_dl = telegram.attachments, telegram.download
+    telegram.attachments, telegram.download = (lambda msgs: iter([("f1", True)])), (lambda fid: (".jpg", b"\xffimg"))
+    telegram.tg = lambda method, **p: {"message_id": 995}
+    state.STATE["sessions"]["701"] = {"tid": 7, "name": "a", "sid": "1b4e28ba-2fa1-11d2-883f-0016d3cca427", "model": "opus", "effort": "high"}
+    sent.clear()
+    streams.append(io.BytesIO(fr((1, json.dumps({"type": "result", "result": "done"}).encode() + b"\n"), (3, b"0"))))
+    real_run(runs.Run(701, 7), 42, [{"message_id": 701, "caption": "see"}], None)
+    assert [(m, r) for m, r, _ in sent if r != "title?session=1b4e28ba-2fa1-11d2-883f-0016d3cca427"] == [("POST", "prepare?session=701"), ("POST", "inbox?name=42-0.jpg"), ("POST", "exec"), ("POST", "outbox-clear?session=701")] and sent[1][2] == b"\xffimg", [(m, r) for m, r, _ in sent]
+    state.STATE["threads"], state.STATE["sessions"] = {"7": {"name": "a"}}, {}
+    streams.append(io.BytesIO(fr((1, b"pushed\n"), (3, b"0"))))
+    push.go(7, 900, "0123456789ab")
+    assert json.loads(sent[-1][2])["cmd"] == ["timeout", "120", "git", "push"] and "GIT_TERMINAL_PROMPT=0" in json.loads(sent[-1][2])["env"], sent[-1]
+    streams.append(io.BytesIO(fr((1, b"Current session: 1% used\n"), (3, b"0"))))
+    assert usage.report() == "👤 me@x (max) · a\nCurrent session: 1% used", usage.report
+    assert methods and set(methods) == {"GET"}, methods
+    telegram.attachments, telegram.download, dockerapi.http, dockerapi.docker = real_att, real_dl, real_http, real_docker
     dockerapi.NAMES.clear(), dockerapi.TOKENS.clear()
 
     # the usage message in General: sent and pinned once, then edited only when its text changed, sent again when deleted

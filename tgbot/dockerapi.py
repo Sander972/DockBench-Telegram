@@ -1,4 +1,4 @@
-"""Docker Engine API over the unix socket (or tcp:// via DOCKER_HOST): dev containers (followed through the events stream), exec, archive upload."""
+"""Docker Engine API over the unix socket (or tcp:// via DOCKER_HOST), read only: the dev containers (followed through the events stream) and files read from them. Everything the bot does in a container goes to its dockbench-agent over HTTP: the probes, the run chores, uploads and the processes it starts."""
 import http.client
 import io
 import json
@@ -10,7 +10,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from .config import EXEC_ENV, WORKSPACE, log
+from .config import EXEC_ENV, log
 
 DOCKER_HOST = os.environ.get("DOCKER_HOST") or "unix:///var/run/docker.sock"
 
@@ -30,15 +30,10 @@ class UnixHTTPConnection(http.client.HTTPConnection):
         self.sock.connect(self.unix_path)
 
 
-def docker(method, path, body=None, timeout=60, stream=False):
+def docker(method, path, timeout=60, stream=False):
     u = urllib.parse.urlparse(DOCKER_HOST)
     conn = UnixHTTPConnection(u.path, timeout) if u.scheme == "unix" else http.client.HTTPConnection(u.hostname, u.port or 2375, timeout=timeout)
-    headers = {}
-    if isinstance(body, dict):
-        body, headers = json.dumps(body).encode(), {"Content-Type": "application/json"}
-    elif body is not None:
-        headers = {"Content-Type": "application/x-tar"}
-    conn.request(method, path, body, headers)
+    conn.request(method, path)
     resp = conn.getresponse()
     if resp.status >= 400:
         data = resp.read()
@@ -49,7 +44,7 @@ def docker(method, path, body=None, timeout=60, stream=False):
             msg = data[:200].decode(errors="replace")
         raise DockerError(f"{method} {path.split('?')[0]}: {resp.status} {msg}")
     if stream:
-        return resp  # the daemon hijacks the connection and closes it at the end, so the body is read until EOF
+        return resp
     data = resp.read()
     conn.close()
     return json.loads(data) if data else None
@@ -117,45 +112,31 @@ def container(name):
     return next((c for c in dev_containers() if project(c) == name), None)
 
 
-def exec_start(cid, cmd, timeout=60, env=EXEC_ENV):
-    eid = docker("POST", f"/containers/{cid}/exec", {"User": "dev", "WorkingDir": WORKSPACE, "Env": env, "Cmd": cmd, "AttachStdin": False, "AttachStdout": True, "AttachStderr": True})["Id"]
-    return eid, docker("POST", f"/exec/{eid}/start", {"Detach": False, "Tty": False}, timeout=timeout, stream=True)
-
-
-def exec_exit(eid, wait=2):
-    """Exit code once the exec is done. It can report Running for a moment after its stream closed, or much longer if the stream was cut."""
-    end = time.monotonic() + wait
-    while (info := docker("GET", f"/exec/{eid}/json")).get("Running") and time.monotonic() < end:
-        time.sleep(0.25)
-    return info.get("ExitCode")
-
-
-def frames(resp):
-    """Demultiplex a non-TTY exec stream: 8-byte header, byte 0 is the stream (1 stdout, 2 stderr), bytes 4-7 the big-endian size."""
-    while len(head := resp.read(8)) == 8:
-        yield head[0], resp.read(int.from_bytes(head[4:], "big"))
-
-
-def exec_run(cid, cmd, timeout=60, env=EXEC_ENV):
-    eid, resp = exec_start(cid, cmd, timeout, env)
-    with resp:
-        out = b"".join(data for _, data in frames(resp))
-    return exec_exit(eid), out
-
-
-# The image's dockbench-agent serves the probes and the run chores (a run's folders, stopping runs) on its port, behind a token it writes at start (the agent's TOKEN_FILE): a request on devnet starts nothing in the container. The bot reads the token once per container through the archive API (no exec) and again after a 401 (the agent restarted with a new one). Images from before these routes (2026-11-10) are not supported: their agent answers nothing to them.
+# The image's dockbench-agent serves the probes, the run chores (a run's folders, stopping runs), uploads and process starts on its port, behind a token it writes at start (the agent's TOKEN_FILE): a request on devnet starts nothing in the container. The bot reads the token once per container through the archive API (no exec) and again after a 401 (the agent restarted with a new one). Images from before these routes (2026-11-10) are not supported: their agent answers nothing to them.
 AGENT_PORT = 8080
 AGENT_TOKEN = "/home/dev/.dockbench-agent-token"
 ROUTES = {"pin-info": ("GET", "/pin-info?dir={}"), "activity": ("GET", "/activity?session={}"), "title": ("GET", "/title?session={}"), "claude-key": ("GET", "/claude-key"), "account": ("GET", "/account"),
-          "prepare": ("POST", "/prepare?session={}"), "outbox-clear": ("POST", "/outbox-clear?session={}"), "stop": ("POST", "/stop?session={}"), "stop-all": ("POST", "/stop-all")}
+          "prepare": ("POST", "/prepare?session={}"), "outbox-clear": ("POST", "/outbox-clear?session={}"), "stop": ("POST", "/stop?session={}"), "stop-all": ("POST", "/stop-all"),
+          "inbox": ("POST", "/inbox?name={}"), "exec": ("POST", "/exec")}
 NAMES = {}  # container id -> name, from the last dev_containers() listing; the name resolves on devnet
 TOKENS = {}  # container id -> its agent's token
 
 
-def http(method, url, headers, timeout):
-    """(status, body) of a request without a body; raises urllib.error.HTTPError on 4xx/5xx and OSError (URLError included) when nothing answers."""
-    with urllib.request.urlopen(urllib.request.Request(url, data=b"" if method == "POST" else None, headers=headers, method=method), timeout=timeout) as r:
+def http(method, url, headers, timeout, body=None, stream=False):
+    """(status, body) of a request, or the open response when stream; raises urllib.error.HTTPError on 4xx/5xx and OSError (URLError included) when nothing answers."""
+    r = urllib.request.urlopen(urllib.request.Request(url, data=body if body is not None else b"" if method == "POST" else None, headers=headers, method=method), timeout=timeout)
+    if stream:
+        return r
+    with r:
         return r.status, r.read()
+
+
+class AgentError(DockerError):
+    """The agent gave no usable answer; code is its HTTP status, None when it gave none."""
+
+    def __init__(self, msg, code=None):
+        super().__init__(msg)
+        self.code = code
 
 
 def token(cid):
@@ -168,31 +149,70 @@ def token(cid):
     return tok.decode(errors="replace") if tok else None
 
 
-def agent(cid, args, timeout=60):
-    """(exit code, output) of the dockbench-agent route `args` (a ROUTES name, then its arguments) over HTTP, shaped like a subcommand's (204, the run is not there, is exit 3). None when it gives nothing this time: no name or token known for the container (an image from before the routes has no token file), an error status, or no answer; the next call asks again."""
+def call(cid, args, timeout=60, body=None, stream=False):
+    """dockbench-agent route `args` (a ROUTES name, then its arguments) of the container over HTTP: (status, body), or the open response when stream. The token is read again once after a 401 (the agent restarted). Raises AgentError when there is no name or token for the container (an image from before the routes has no token file), on an error status, or when nothing answers."""
     name = NAMES.get(cid)
     if not name:
-        return None
+        raise AgentError(f"container {cid[:12]} not listed yet")
     method, path = ROUTES[args[0]]
     path = path.format(*(urllib.parse.quote(a, safe="") for a in args[1:]))
+    route = path.split("?")[0]
     for retry in (True, False):
         tok = TOKENS.get(cid) or token(cid)
         if not tok:
-            return None
+            raise AgentError(f"{name}: no dockbench-agent token")
         TOKENS[cid] = tok
         try:
-            status, body = http(method, f"http://{name}:{AGENT_PORT}{path}", {"Authorization": f"Bearer {tok}"}, timeout)
-            return (3 if status == 204 else 0), body
+            return http(method, f"http://{name}:{AGENT_PORT}{path}", {"Authorization": f"Bearer {tok}"}, timeout, body, stream)
         except urllib.error.HTTPError as e:
             if e.code == 401 and retry:
                 TOKENS.pop(cid, None)
                 continue
-            if e.code != 404:  # 404: an agent from before the routes, which its caller reports
-                log.warning("%s: agent %s answered %s", name, path.split("?")[0], e.code)
-            return None
-        except OSError:  # refused, name not resolved, timeout
-            return None
-    return None
+            raise AgentError(f"{name}: dockbench-agent {route} answered {e.code}", e.code) from None
+        except OSError as e:  # refused, name not resolved, timeout
+            raise AgentError(f"{name}: dockbench-agent {route}: {type(e).__name__}") from None
+    raise AgentError(f"{name}: dockbench-agent {route} answered 401", 401)
+
+
+def agent(cid, args, timeout=60):
+    """(exit code, output) of the agent route `args`, shaped like a subcommand's (204, the run is not there, is exit 3). None when it gives nothing this time (see call()); the next call asks again."""
+    try:
+        status, body = call(cid, args, timeout)
+    except AgentError as e:
+        if e.code not in (None, 404):  # 404: an agent from before the route, which its caller reports
+            log.warning("%s", e)
+        return None
+    return (3 if status == 204 else 0), body
+
+
+def frames(resp):
+    """Demultiplex an exec stream: 8-byte header, byte 0 is the stream (1 stdout, 2 stderr, 3 the agent's exit code frame), bytes 4-7 the big-endian size."""
+    while len(head := resp.read(8)) == 8:
+        yield head[0], resp.read(int.from_bytes(head[4:], "big"))
+
+
+def exec_frames(cid, cmd, timeout=60, env=EXEC_ENV):
+    """The frames of argv cmd run by the container's agent as dev in the workspace (POST /exec), the last one (3, b"<exit code>"). Raises AgentError before the first frame when the agent cannot be asked; a stream lost later raises OSError or http.client.HTTPException. timeout is per read: a run may be silent for long."""
+    with call(cid, ["exec"], timeout, json.dumps({"cmd": cmd, "env": env}).encode(), stream=True) as resp:
+        yield from frames(resp)
+
+
+def exec_run(cid, cmd, timeout=60, env=EXEC_ENV):
+    """(exit code, stdout and stderr joined) of argv cmd in the container; the code is None when the stream ended without one."""
+    code, out = None, []
+    for kind, data in exec_frames(cid, cmd, timeout, env):
+        if kind == 3:
+            code = int(data) if data.isdigit() else None
+        else:
+            out.append(data)
+    return code, b"".join(out)
+
+
+def put_inbox(cid, name, data):
+    """A prompt's attachment into the container's inbox (POST /inbox); raises AgentError unless the agent took it."""
+    status, _ = call(cid, ["inbox", name], 60, data)
+    if status != 200:
+        raise AgentError(f"inbox upload answered {status}", status)
 
 
 def get_files(cid, path, limit):
@@ -203,14 +223,3 @@ def get_files(cid, path, limit):
         raise DockerError(f"{path} holds over {limit // 2**20} MB")
     with tarfile.open(fileobj=io.BytesIO(data)) as tar:
         return [(m.name.partition("/")[2], tar.extractfile(m).read()) for m in tar.getmembers() if m.isfile()]
-
-
-def tarball(files):
-    """put-archive keeps the tar header owner, so files are written as dev (uid 1000)."""
-    buf = io.BytesIO()
-    with tarfile.open(fileobj=buf, mode="w") as tar:
-        for name, data in files:
-            info = tarfile.TarInfo(name)
-            info.size, info.uid, info.gid, info.mode, info.mtime = len(data), 1000, 1000, 0o644, int(time.time())
-            tar.addfile(info, io.BytesIO(data))
-    return buf.getvalue()
