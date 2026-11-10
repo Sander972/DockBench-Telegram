@@ -12,7 +12,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from . import claude, commands, dockerapi, markdown, onboarding, pins, push, routing, runs, state, status, telegram, topics, usage
+from . import app, claude, commands, dockerapi, markdown, onboarding, pins, push, routing, runs, state, status, telegram, topics, usage
 from .config import BOT_MENU, DEFAULT_PROMPT, EFFORTS, IDLE_LIMIT, INBOX, MAX_SESSIONS, MODELS, PERMS, RUN_TIMEOUT, WORKSPACE
 
 
@@ -100,6 +100,10 @@ def self_check():
         assert not dockerapi.LIVE and seen_live[-1] == (True, 0), seen_live
     dockerapi.docker, dockerapi.CACHE = real_docker, None
     dockerapi.NAMES.clear()
+    pins.WAKE.clear(), topics.WAKE.clear()
+    app.changed()
+    assert pins.WAKE.is_set() and topics.WAKE.is_set() and not usage.WAKE.is_set()
+    pins.WAKE.clear(), topics.WAKE.clear()
 
     # uploads: a multipart body the stdlib email parser reads back, text and JSON fields plus the file
     body, ctype = telegram.multipart({"chat_id": -100, "media": [{"type": "photo"}], "caption": "hi"}, {"photo": ("1.png", b"\x89PNG\r\n--x")})
@@ -155,7 +159,7 @@ def self_check():
     assert dockerapi.project({"Names": ["/dockbench-a"]}) == "a" and dockerapi.project({"Names": ["/other"]}) is None and dockerapi.project({}) is None
 
     good = onboarding.checklist("b", True, True, True, True, 2)
-    assert good.count("✅") == 5 and good.endswith("within ~30 s."), good
+    assert good.count("✅") == 5 and good.endswith("within seconds."), good
     bad = onboarding.checklist("b", False, True, False, False, "connect {x}")
     assert bad.count("\n❌") == 4 and "Pin messages" in bad and "Delete messages" in bad and "Topics are off" in bad and "connect {x}" in bad and bad.endswith("/setup@b here again."), bad
 

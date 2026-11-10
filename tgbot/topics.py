@@ -1,8 +1,11 @@
 """Auto-created topics: a running dev container without a topic gets one."""
+import threading
 import time
 
 from . import dockerapi, state, telegram
 from .config import NAME_RE, log
+
+WAKE = threading.Event()  # set on every container event (app.changed()), so a new container gets its topic at once
 
 
 def missing_topics(containers, bound):
@@ -42,7 +45,7 @@ def autocreate(containers):
 
 
 def autocreate_loop():
-    """Own thread: slow Docker or Telegram calls here must not hold up getUpdates."""
+    """Own thread: a pass on every container event (WAKE), else every 5 min as a safety net. Slow Docker or Telegram calls here must not hold up getUpdates."""
     last = None
     while True:
         if state.GROUP_ID and state.OWNER_ID:  # no topics before someone can use them
@@ -52,7 +55,8 @@ def autocreate_loop():
                     autocreate(containers)
                 last = None
             except Exception as e:
-                if str(e) != last:  # once per outage, not every 30 s
+                if str(e) != last:  # once per outage, not every pass
                     log.warning("topic auto-create failed: %s", e)
                 last = str(e)
-        time.sleep(30)  # ponytail: polls every ~30 s, Docker's /events stream would make it instant
+        WAKE.wait(300)
+        WAKE.clear()

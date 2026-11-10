@@ -83,5 +83,5 @@ def checklist(bot, forum, admin, pin, delete, found):
         (delete, "admin with Delete messages", f"not an admin with Delete messages, so /clean can only delete the bot's own messages: group settings > Administrators > @{bot}, enable Delete messages"),
         (isinstance(found, int), f"Docker reachable, {found} running dev containers", f"Docker not reachable: {found}"),
     ]
-    end = "All set: running dev containers get a topic within ~30 s." if all(r[0] for r in rows) else f"Fix the ❌ items, then send /setup@{bot} here again."
+    end = "All set: running dev containers get a topic within seconds." if all(r[0] for r in rows) else f"Fix the ❌ items, then send /setup@{bot} here again."
     return "\n".join(["Setup check:"] + [f"✅ {ok}" if good else f"❌ {bad}" for good, ok, bad in rows] + [end])

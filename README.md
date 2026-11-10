@@ -101,7 +101,7 @@ Send that `/setup <code>` to the bot in a private chat. You become its owner, th
 2. Add the bot as admin with **Manage topics**, **Pin messages** and **Delete messages**.
 3. Send `/setup@<bot>` in the group. The bot binds itself to the group and replies with a checklist of those rights and of Docker access, with the fix for anything missing. Send it again after a fix.
 
-Within about 30 seconds the bot creates a topic for every running dev container, named after its `PROJECT` (container `dockbench-myapp` → topic `myapp`). Owner and group live in the `state` volume and survive restarts and redeploys. To move the bot to another forum group later, send `/setup@<bot> move` there while nothing is running.
+Within seconds the bot creates a topic for every running dev container, named after its `PROJECT` (container `dockbench-myapp` → topic `myapp`). Owner and group live in the `state` volume and survive restarts and redeploys. To move the bot to another forum group later, send `/setup@<bot> move` there while nothing is running.
 
 ### 5. Try it
 

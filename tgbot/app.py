@@ -10,6 +10,12 @@ from . import dockerapi, pins, routing, runs, state, status, telegram, topics, u
 from .config import STATUS_PORT, log
 
 
+def changed():
+    """A dev container was created, started, stopped, removed, renamed or paused: the pins and the topics follow at once. Not usage.WAKE: a usage pass is a Claude Code start per account."""
+    pins.WAKE.set()
+    topics.WAKE.set()
+
+
 def main():
     if not telegram.TOKEN:
         sys.exit("TELEGRAM_BOT_TOKEN is required")
@@ -33,6 +39,7 @@ def main():
     threading.Thread(target=http.server.ThreadingHTTPServer(("0.0.0.0", STATUS_PORT), status.StatusHandler).serve_forever, daemon=True).start()
     runs.recover()
     log.info("polling from offset %s, docker at %s", state.STATE["offset"], dockerapi.DOCKER_HOST)
+    threading.Thread(target=dockerapi.watch, args=(changed,), daemon=True).start()
     threading.Thread(target=topics.autocreate_loop, daemon=True).start()
     threading.Thread(target=runs.ticker, daemon=True).start()
     threading.Thread(target=runs.watchdog, daemon=True).start()
