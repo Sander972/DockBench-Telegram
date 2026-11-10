@@ -78,13 +78,7 @@ Create a bot with [@BotFather](https://t.me/BotFather) and keep its token. Priva
 
 ### 2. Deploy it
 
-The bot runs as a non-root user and reaches the Docker socket through the socket's group, so look up that group id on your server:
-
-```sh
-stat -c %g /var/run/docker.sock
-```
-
-Deploy [`compose.yml`](compose.yml) with `TELEGRAM_BOT_TOKEN` and `DOCKER_GID` set, as a Portainer stack (**Stacks → Add stack**, paste, fill the variables) or with plain Compose:
+Deploy [`compose.yml`](compose.yml) with `TELEGRAM_BOT_TOKEN` set, as a Portainer stack (**Stacks → Add stack**, paste, fill the variables) or with plain Compose:
 
 ```sh
 docker compose -p dockbench-telegram --env-file telegram.env up -d
@@ -170,10 +164,8 @@ All settings are environment variables of the stack. [`.env.example`](.env.examp
 | Variable | Required | What it does |
 |---|---|---|
 | `TELEGRAM_BOT_TOKEN` | yes | From BotFather. Lives only in the stack environment. |
-| `DOCKER_GID` | yes | Group id of `/var/run/docker.sock` on the host (`stat -c %g /var/run/docker.sock`). |
 | `TELEGRAM_GROUP_ID` | no | The forum supergroup, `-100…`. Normally set by `/setup` in the group; setting it here pins the group and ignores the stored one. |
 | `TELEGRAM_OWNER_ID` | no | The only Telegram user the bot listens to. Normally set by `/setup <code>`; setting it here skips the code. |
-| `DOCKER_HOST` | no | Default `unix:///var/run/docker.sock`. A `tcp://` URL goes through a socket proxy (see [DEV-README.md](DEV-README.md#security)). |
 | `CPUSET` | no | Cores the bot may run on, as a Linux cpuset list (`1-3`). Empty (default) means every core. The DockBench Dashboard sets every core but 0, so core 0 stays free for the host. |
 
 To update, pull the new image and recreate the container: the dashboard's **Pull and restart** button, or redeploy the stack in Portainer with "pull latest image".
@@ -183,7 +175,7 @@ To update, pull the new image and recreate the container: the dashboard's **Pull
 The bot is a shell in every dev container. It accepts exactly one Telegram user in exactly one group and drops everything else without answering. Claiming it needs the one-time code from the server's logs. It never logs message text or the token, never passes a prompt through a shell, runs as a non-root user with no published port (its only listener, the dashboard's `/status` on port 8080, has no auth and is reachable from every dev container on `devnet`, so it never returns ids, the setup code or the token), and only touches containers labeled `dockbench=true`.
 
 > [!WARNING]
-> The Docker socket gives root-equivalent access to the host, read-only mount or not. [DEV-README.md](DEV-README.md#security) explains why a socket proxy buys little and how to add one anyway.
+> The bot sees Docker only through a socket proxy in its own stack that answers reads and refuses everything else, so a compromised bot cannot start or change containers. It can still run anything as the dev user inside the dev containers, which is its job. [DEV-README.md](DEV-README.md#security) has the details.
 
 ## Contributing
 

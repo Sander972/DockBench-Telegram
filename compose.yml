@@ -9,14 +9,30 @@ services:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       TELEGRAM_GROUP_ID: ${TELEGRAM_GROUP_ID:-}
       TELEGRAM_OWNER_ID: ${TELEGRAM_OWNER_ID:-}
-      DOCKER_HOST: ${DOCKER_HOST:-unix:///var/run/docker.sock}
-    group_add:
-      - ${DOCKER_GID}
+      # read-only Docker access: everything the bot does in a dev container goes to that container's dockbench-agent
+      DOCKER_HOST: tcp://docker-proxy:2375
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
       - state:/data
     networks:
       - devnet
+      - telegram-docker
+    depends_on:
+      - docker-proxy
+    restart: unless-stopped
+
+  # GET only: container lists, events and file reads, never exec or create; only the bot can reach it, never put it on devnet
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    container_name: dockbench-telegram-docker
+    cpuset: ${CPUSET:-}
+    environment:
+      CONTAINERS: 1
+      EVENTS: 1
+      POST: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - telegram-docker
     restart: unless-stopped
 
 volumes:
@@ -25,3 +41,5 @@ volumes:
 networks:
   devnet:
     external: true
+  telegram-docker:
+    internal: true
